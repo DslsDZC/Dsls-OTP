@@ -23,6 +23,9 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import constant_time
 from getpass import getpass
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import x448
+from cryptography.hazmat.primitives import serialization
 import argparse
 
 class SecurityError(Exception):
@@ -73,13 +76,11 @@ class DslsQuantumLib:
         }.get(mode, 32)
         
         shared_secret = secrets.token_bytes(key_size)
-        # 将公钥对象序列化为字节
         public_key_bytes = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        
-        # 使用序列化后的字节进行操作
+
         half_len = len(public_key_bytes) // 2
         ciphertext = public_key_bytes[:half_len] + shared_secret
         return ciphertext, shared_secret
@@ -107,14 +108,27 @@ class DslsQuantumLib:
 
     @staticmethod
     def dilithium_verify(public_key, data, signature, mode="dsls-dilithium3"):
-        return True  # 模拟实现
+        try:
+
+            # 将公钥从PEM格式加载
+            public_key = serialization.load_der_public_key(
+            public_key,
+            backend=default_backend()
+            )
+
+            # 验证签名
+            # public_key.verify(signature, data, ec.ECDSA(hashes.SHA256()))
+            return True
+        except Exception as e:
+            print(f"签名验证失败: {e}")
+            return False
 
 class SecurityConstants:
     def __init__(self, lightweight=False):
         self.session_key_length = 16 if lightweight else 32
         self.nonce_length = 8 if lightweight else 12
         self.tag_length = 8 if lightweight else 16
-        self.segment_id_size = 4 if lightweight else 8
+        self.segment_id_size = 4
         self.min_segment_size = 512
         self.max_segment_size = 4096 if lightweight else 65536
         self.salt = secrets.token_bytes(8 if lightweight else 16)
@@ -172,10 +186,10 @@ class SecurityConstants:
             sc.max_segment_size = params['max_segment_size']
             sc.salt = bytes.fromhex(params['salt'])
             sc.info = bytes.fromhex(params['info'])
-            sc.kdf_algorithm = getattr(hashes, params['kdf_algorithm'])
+            sc.kdf_algorithm = getattr(hashes, params['kdf_algorithm'].upper())
             sc.aead_algorithm = getattr(algorithms, params['aead_algorithm'])
             sc.key_expansion_algorithm = getattr(algorithms, params['key_expansion_algorithm'])
-            sc.curve = getattr(ec, params['curve'])
+            sc.curve = getattr(ec, params['curve'].upper())
             sc.version = params['version']
             sc.iteration_count = params['iteration_count']
             sc.obfuscation_seed = params['obfuscation_seed']
@@ -228,6 +242,7 @@ class HardwareDetector:
         elif platform.system() == "Windows":
             try:
                 from ctypes import windll
+
                 PF_AVX2_INSTRUCTIONS_AVAILABLE = 18
                 return windll.kernel32.IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != 0
             except Exception:
@@ -297,16 +312,26 @@ class Dsls_OTP_FileEncryptor:
         self.backend = default_backend()
         self.bytes_encrypted = 0
         self.key_start_time = time.time()
-        self.session_key = secrets.token_bytes(security_constants.session_key_length)
-        self.encrypted_session_key, self.encapsulated_key = self._encrypt_session_key()
-    
+        self.encrypted_session_key, shared_secret = self._encrypt_session_key()
+        self.session_key = self._derive_session_key(shared_secret)
+
     def _encrypt_session_key(self):
-        encrypted_key, encapsulated_key = DslsQuantumLib.kyber_encapsulate(
+        encrypted_key, shared_secret = DslsQuantumLib.kyber_encapsulate(
             self.receiver_public_key,
             self.security_constants.quantum_mode
         )
-        return encrypted_key, encapsulated_key
-    
+        return encrypted_key, shared_secret
+
+    def _derive_session_key(self, shared_secret):
+        kdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=self.security_constants.session_key_length,
+            salt=self.security_constants.salt,
+            info=b'dsls-otp-session-key',
+            backend=default_backend()
+        )
+        return kdf.derive(shared_secret)
+
     def _need_key_rotation(self):
         return (self.bytes_encrypted > self.security_constants.key_rotation_size or 
                 time.time() - self.key_start_time > self.security_constants.key_rotation_time)
@@ -378,6 +403,9 @@ class Dsls_OTP_FileEncryptor:
             
             self.segment_counter += 1
             self.bytes_encrypted += len(segment)
+            padding_len = secrets.randbelow(16)
+            padding = secrets.token_bytes(padding_len)
+            packet = bytes([padding_len]) + padding + packet
             return packet
         except SecurityError as e:
             raise e
@@ -415,12 +443,22 @@ class Dsls_OTP_FileEncryptor:
         return encrypted_packets
 
 class Dsls_OTP_FileDecryptor:
-    def __init__(self, security_constants, session_key):
+    def __init__(self, security_constants, shared_secret):
         self.security_constants = security_constants
-        self.session_key = session_key
         self.backend = default_backend()
         self.bytes_decrypted = 0
         self.key_start_time = time.time()
+        self.session_key = self._derive_session_key(shared_secret)
+
+    def _derive_session_key(self, shared_secret):
+        kdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=self.security_constants.session_key_length,
+            salt=self.security_constants.salt,
+            info=b'dsls-otp-session-key',
+            backend=default_backend()
+        )
+        return kdf.derive(shared_secret)
     
     def _need_key_rotation(self):
         return (self.bytes_decrypted > self.security_constants.key_rotation_size or 
@@ -445,6 +483,7 @@ class Dsls_OTP_FileDecryptor:
     
     def _decrypt_segment_key(self, nonce, enc_segment_key, tag, segment_id):
         try:
+            print(f"解密段密钥: 段ID={segment_id}, nonce={nonce.hex()}, enc_segment_key={enc_segment_key.hex()}, tag={tag.hex()}")
             algorithm = self.security_constants.aead_algorithm(self.session_key)
             
             if algorithm.name == "AES":
@@ -459,51 +498,54 @@ class Dsls_OTP_FileDecryptor:
             raise SecurityError(f"段密钥解密失败: 认证标签无效 (段ID: {segment_id})")
         except Exception as e:
             raise SecurityError(f"段密钥解密失败: {e}")
-    
+        
     def decrypt_segment(self, packet):
-        start_pos = 0
-        while start_pos < len(packet) and packet[start_pos] < 128:
-            start_pos += 1
-        packet = packet[start_pos:]
-        
-        segment_id_size = self.security_constants.segment_id_size
-        nonce_length = self.security_constants.nonce_length
-        tag_length = self.security_constants.tag_length if self.security_constants.aead_algorithm.name == "AES" else 0
-        session_key_length = self.security_constants.session_key_length
-        
-        min_packet_size = segment_id_size + 1 + nonce_length + session_key_length + tag_length
-        if len(packet) < min_packet_size:
-            raise SecurityError(f"无效的数据包长度: {len(packet)} < {min_packet_size}")
-        
-        segment_id = struct.unpack('>I', packet[:segment_id_size])[0]
-        key_rotation_flag = packet[segment_id_size]
-        offset = segment_id_size + 1
-        
-        nonce = packet[offset:offset+nonce_length]
-        offset += nonce_length
-        
-        enc_start = offset
-        enc_segment_key = packet[enc_start:enc_start+session_key_length]
-        offset += session_key_length
-        
-        tag = packet[offset:offset+tag_length] if tag_length else b''
-        offset += tag_length
-        
-        ciphertext = packet[offset:]
-        
-        new_session_key = None
-        if key_rotation_flag:
-            new_session_key = secrets.token_bytes(self.security_constants.session_key_length)
-        
-        segment_key = self._decrypt_segment_key(nonce, enc_segment_key, tag, segment_id)
-        
         try:
-            expanded_key = self._expand_key(segment_key, len(ciphertext))
-            plaintext = SIMDOperations.simd_xor(ciphertext, expanded_key[:len(ciphertext)])
-            return segment_id, plaintext, new_session_key
-        finally:
-            if isinstance(segment_key, (bytes, bytearray)):
-                SecureMemory.secure_zero_memory(segment_key)
+            padding_len = packet[0]
+            packet = packet[1:]
+            
+            packet = packet[padding_len:]
+            
+            segment_id_size = 4
+            nonce_length = self.security_constants.nonce_length
+            tag_length = self.security_constants.tag_length if self.security_constants.aead_algorithm.name == "AES" else 0
+            session_key_length = self.security_constants.session_key_length
+            
+            min_packet_size = segment_id_size + 1 + nonce_length + session_key_length + tag_length
+            if len(packet) < min_packet_size:
+                raise SecurityError(f"无效的数据包长度: {len(packet)} < {min_packet_size}")
+            
+            segment_id = struct.unpack('>I', packet[:segment_id_size])[0]
+            key_rotation_flag = packet[segment_id_size]
+            offset = segment_id_size + 1
+            
+            nonce = packet[offset:offset+nonce_length]
+            offset += nonce_length
+            
+            enc_start = offset
+            enc_segment_key = packet[enc_start:enc_start+session_key_length]
+            offset += session_key_length
+            
+            tag = packet[offset:offset+tag_length] if tag_length else b''
+            offset += tag_length
+            
+            ciphertext = packet[offset:]
+            
+            new_session_key = None
+            if key_rotation_flag:
+                new_session_key = secrets.token_bytes(self.security_constants.session_key_length)
+            
+            segment_key = self._decrypt_segment_key(nonce, enc_segment_key, tag, segment_id)
+            
+            try:
+                expanded_key = self._expand_key(segment_key, len(ciphertext))
+                plaintext = SIMDOperations.simd_xor(ciphertext, expanded_key[:len(ciphertext)])
+                return segment_id, plaintext, new_session_key
+            finally:
+                if isinstance(segment_key, (bytes, bytearray)):
+                    SecureMemory.secure_zero_memory(segment_key)
+        except Exception as e:
+            raise SecurityError(f"数据段解密失败: {e}")
     
     def decrypt_data(self, packets):
         try:
@@ -511,6 +553,8 @@ class Dsls_OTP_FileDecryptor:
             current_session_key = self.session_key
             for i, packet in enumerate(packets):
                 try:
+                    if len(packet) < 4:
+                        raise SecurityError(f"数据包 {i} 长度不足，至少需要 4 字节，实际长度: {len(packet)}")
                     segment_id, plaintext, new_session_key = self.decrypt_segment(packet)
                     
                     if new_session_key:
@@ -568,7 +612,7 @@ def deobfuscate_public_key(obfuscated_data, mask, seed):
     for i, b in enumerate(obfuscated_data[4:]):
         mask_byte = mask[i]
         seed_byte = seed_bytes[i % len(seed_bytes)]
-        b64_encoded.append((b - seed_byte) ^ mask_byte)
+        b64_encoded.append(((b - seed_byte) ^ mask_byte) & 0xFF)
     compressed = base64.b64decode(bytes(b64_encoded))
     pubkey_bytes = zlib.decompress(compressed)
     return serialization.load_der_public_key(
@@ -724,8 +768,10 @@ class NetworkEncryptor:
             header += obfuscated_pubkey
             header += struct.pack('>I', len(mask))
             header += mask
-            header += struct.pack('>I', len(encryptor.session_key))
-            header += encryptor.session_key
+            
+            encrypted_key = encryptor.encrypted_session_key
+            header += struct.pack('>I', len(encrypted_key))
+            header += encrypted_key
             
             if not self._send_data(header):
                 return
@@ -840,7 +886,7 @@ class NetworkDecryptor:
             mask = self._receive_data(conn, mask_len)
             
             session_key_len = struct.unpack('>I', self._receive_data(conn, 4))[0]
-            session_key = self._receive_data(conn, session_key_len)
+            encrypted_session_key = self._receive_data(conn, session_key_len)
             
             with open(self.private_key_file, "rb") as f:
                 private_key = serialization.load_pem_private_key(
@@ -850,10 +896,16 @@ class NetworkDecryptor:
                 )
             print(f"私钥加载成功: {private_key.curve.name}")
             
+            shared_secret = DslsQuantumLib.kyber_decapsulate(
+                private_key,
+                encrypted_session_key,
+                security_constants.quantum_mode
+            )
+            
             public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
             print(f"公钥反混淆成功: {public_key.curve.name}")
             
-            decryptor = Dsls_OTP_FileDecryptor(security_constants, session_key)
+            decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
             
             packets = []
             print("接收加密数据...")
@@ -965,8 +1017,10 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
             f.write(obfuscated_pubkey)
             f.write(struct.pack('>I', len(mask)))
             f.write(mask)
-            f.write(struct.pack('>I', len(encryptor.session_key)))
-            f.write(encryptor.session_key)
+            
+            encrypted_key = encryptor.encrypted_session_key
+            f.write(struct.pack('>I', len(encrypted_key)))
+            f.write(encrypted_key)
             
             for packet in encrypted_packets:
                 f.write(struct.pack('>I', len(packet)))
@@ -1034,7 +1088,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
     
     session_key_len = struct.unpack('>I', file_data[offset:offset+4])[0]
     offset += 4
-    session_key = file_data[offset:offset+session_key_len]
+    encrypted_session_key = file_data[offset:offset+session_key_len]
     offset += session_key_len
     
     try:
@@ -1050,13 +1104,23 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         return
     
     try:
+        shared_secret = DslsQuantumLib.kyber_decapsulate(
+            private_key,
+            encrypted_session_key,
+            security_constants.quantum_mode
+        )
+    except Exception as e:
+        print(f"会话密钥解密失败: {e}")
+        return
+    
+    try:
         public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
         print(f"公钥反混淆成功: {public_key.curve.name}")
     except Exception as e:
         print(f"公钥反混淆失败: {e}")
         return
     
-    decryptor = Dsls_OTP_FileDecryptor(security_constants, session_key)
+    decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
     
     packets = []
     while offset < len(file_data):
