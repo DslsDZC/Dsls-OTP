@@ -73,13 +73,11 @@ class DslsQuantumLib:
         }.get(mode, 32)
         
         shared_secret = secrets.token_bytes(key_size)
-        # 将公钥对象序列化为字节
         public_key_bytes = public_key.public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         
-        # 使用序列化后的字节进行操作
         half_len = len(public_key_bytes) // 2
         ciphertext = public_key_bytes[:half_len] + shared_secret
         return ciphertext, shared_secret
@@ -297,7 +295,6 @@ class Dsls_OTP_FileEncryptor:
         self.backend = default_backend()
         self.bytes_encrypted = 0
         self.key_start_time = time.time()
-        # 使用Kyber共享密钥作为会话密钥
         self.encrypted_session_key, shared_secret = self._encrypt_session_key()
         self.session_key = self._derive_session_key(shared_secret)
 
@@ -389,9 +386,9 @@ class Dsls_OTP_FileEncryptor:
             
             self.segment_counter += 1
             self.bytes_encrypted += len(segment)
-            padding_len = secrets.randbelow(16)  # 填充长度限制在 0-15 字节
+            padding_len = secrets.randbelow(16)
             padding = secrets.token_bytes(padding_len)
-            packet = bytes([padding_len]) + padding + packet  # 填充长度 + 填充 + 数据包
+            packet = bytes([padding_len]) + padding + packet
             return packet
         except SecurityError as e:
             raise e
@@ -434,7 +431,6 @@ class Dsls_OTP_FileDecryptor:
         self.backend = default_backend()
         self.bytes_decrypted = 0
         self.key_start_time = time.time()
-        # 使用HKDF派生会话密钥
         self.session_key = self._derive_session_key(shared_secret)
 
     def _derive_session_key(self, shared_secret):
@@ -488,14 +484,12 @@ class Dsls_OTP_FileDecryptor:
         
     def decrypt_segment(self, packet):
         try:
-            # 读取填充长度
             padding_len = packet[0]
             packet = packet[1:]
             
-            # 跳过填充
             packet = packet[padding_len:]
             
-            segment_id_size = 4  # 固定为 4 字节
+            segment_id_size = 4
             nonce_length = self.security_constants.nonce_length
             tag_length = self.security_constants.tag_length if self.security_constants.aead_algorithm.name == "AES" else 0
             session_key_length = self.security_constants.session_key_length
@@ -885,7 +879,6 @@ class NetworkDecryptor:
                 )
             print(f"私钥加载成功: {private_key.curve.name}")
             
-            # 修复点：解密 session_key
             shared_secret = DslsQuantumLib.kyber_decapsulate(
                 private_key,
                 encrypted_session_key,
@@ -895,7 +888,6 @@ class NetworkDecryptor:
             public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
             print(f"公钥反混淆成功: {public_key.curve.name}")
             
-            # 使用派生后的密钥创建解密器
             decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
             
             packets = []
@@ -1009,7 +1001,6 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
             f.write(struct.pack('>I', len(mask)))
             f.write(mask)
             
-            # 修复点：使用加密后的 session_key
             encrypted_key = encryptor.encrypted_session_key
             f.write(struct.pack('>I', len(encrypted_key)))
             f.write(encrypted_key)
@@ -1096,7 +1087,6 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         return
     
     try:
-        # 修复点：解密 session_key
         shared_secret = DslsQuantumLib.kyber_decapsulate(
             private_key,
             encrypted_session_key,
@@ -1113,7 +1103,6 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         print(f"公钥反混淆失败: {e}")
         return
     
-    # 使用派生后的密钥创建解密器
     decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
     
     packets = []
