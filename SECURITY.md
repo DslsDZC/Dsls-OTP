@@ -7,19 +7,11 @@ Thank you for helping to improve the security of the Dsls-OTP project! If you di
 ### How to Report
 
 1. **Do Not Disclose Publicly**: Please avoid reporting security issues in public forums, GitHub Issues, or other public channels to prevent potential exploitation.
-<<<<<<< HEAD
 2. **Contact Us via Email**: Send a detailed report to our security team at `dsls.dzc@gmail.com`. Include:
-=======
-2. **Contact Us via Email**: Send a detailed report to our security team at `security@dsls-otp.com`. Include:
->>>>>>> dce485bc3c01f9ff83505aa15b822ac40e8c6f87
    - A clear description of the vulnerability.
    - Steps to reproduce the issue.
    - Affected versions or code snippets.
    - Your contact information (optional).
-<<<<<<< HEAD
-=======
-3. **Encrypt Your Report**: If your report contains sensitive information, please encrypt it using our PGP public key. You can find the key here: [PGP Public Key](https://dsls-otp.com/pgp-key).
->>>>>>> dce485bc3c01f9ff83505aa15b822ac40e8c6f87
 
 ### Our Commitment
 
