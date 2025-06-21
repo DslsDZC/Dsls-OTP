@@ -2,6 +2,9 @@
 
 [English](README.md) / [简体中文](README_CN.md) / 日本語 / [Français](README_FR.md) / [Deutsch](README_DE.md)
 
+![Static Badge](https://img.shields.io/badge/License_GNU_AFFERO-0?logo=gnu&color=8A2BE2)
+<img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
+
 ## ✨ プロジェクト概要
 
 Dsls-OTP は、ワンタイムパッド（OTP）暗号化を最適化した量子耐性ネットワーク暗号化ソリューションです。最適化された OTP メカニズム、最新の暗号化アルゴリズム、および量子耐性技術を組み合わせることで、卓越したデータ保護を提供します。内蔵のネットワーク伝送機能により、安全なファイル転送が簡単かつ効率的になり、さまざまなネットワーク環境に適応します。

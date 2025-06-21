@@ -2,6 +2,9 @@
 
 [English](README.md) / [简体中文](README_CN.md) / [日本語](README_JP.md) / Français / [Deutsch](README_DE.md)
 
+![Static Badge](https://img.shields.io/badge/License_GNU_AFFERO-0?logo=gnu&color=8A2BE2)
+<img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
+
 ## ✨ Aperçu du projet
 
 Dsls-OTP est une solution de chiffrement réseau résistante aux quanta optimisée avec le chiffrement par bloc unique (OTP). En combinant un mécanisme OTP optimisé avec des algorithmes de chiffrement modernes et des technologies résistantes aux quanta, il offre une protection exceptionnelle des données. Sa fonctionnalité de transmission réseau intégrée rend le transfert de fichiers sécurisé simple et efficace, adaptable à divers environnements réseau.
