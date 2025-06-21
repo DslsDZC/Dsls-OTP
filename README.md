@@ -1,19 +1,13 @@
-<<<<<<< HEAD
 # Dsls-OTP: A Quantum-Resistant Network Encryption Optimized with OTP
-=======
-# Dsls-OTP：基于OPT加密优化的抗无穷算力的一种网络传输加密
->>>>>>> 3cd8352 (更新 README 文件以更准确地描述项目功能，优化代码以提高性能和安全性，添加新的密钥生成和加密功能)
 
 English / [简体中文](README_CN.md) / [日本語](README_JP.md) / [Français](README_FR.md) / [Deutsch](README_DE.md) 
 
 ![Static Badge](https://img.shields.io/badge/License_GNU_AFFERO-0?logo=gnu&color=8A2BE2)
 <img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
 
-<<<<<<< HEAD
 ## ✨ Project Overview
-=======
+
 Dsls-OTP 是基于OPT加密优化的抗无穷算力的一种网络传输加密。通过优化的一次性密码（OTP）机制，结合现代加密算法与抗量子攻击技术，提供卓越的数据保护能力。其内置的网络传输功能，让文件的安全传递变得简单高效，适配多种网络环境。
->>>>>>> 3cd8352 (更新 README 文件以更准确地描述项目功能，优化代码以提高性能和安全性，添加新的密钥生成和加密功能)
 
 Dsls-OTP is a quantum-resistant network encryption solution optimized with one-time pad (OTP) encryption. By combining an optimized OTP mechanism with modern encryption algorithms and quantum-resistant technologies, it provides exceptional data protection. Its built-in network transmission functionality makes secure file transfer simple and efficient, adaptable to various network environments.
 
