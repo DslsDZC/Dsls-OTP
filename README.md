@@ -24,47 +24,6 @@ Whether for resource-constrained embedded devices or high-performance standard a
 
 ---
 
-## 📦 File Structure
-
-```
-Dsls-OTP/
-├── python/
-│   ├── dsls-otp.py       # Main program file
-│   ├── requirements.txt  # Dependency list
-├── README.md             # Project documentation
-├── LICENSE               # License file
-```
----
-
-## 📖 Usage Guide
-
-### 1. Encrypt File
-```bash
-python dsls-otp.py encrypt --input <input_file_path> --output <output_file_path> --receiver-key <receiver_public_key_path> [--lightweight]
-```
-
-### 2. Decrypt File
-```bash
-python dsls-otp.py decrypt --input <input_file_path> --output <output_file_path> --private-key <private_key_path> [--password <private_key_password>]
-```
-
-### 3. Generate Key Pair
-```bash
-python dsls-otp.py keygen --private-key <private_key_save_path> --public-key <public_key_save_path> [--password <private_key_password>]
-```
-
-### 4. Send Encrypted File Over Network
-```bash
-python dsls-otp.py send --input <input_file_path> --receiver-key <receiver_public_key_path> --target <target_IP:port> [--lightweight]
-```
-
-### 5. Receive and Decrypt Network File
-```bash
-python dsls-otp.py receive --output <output_file_path> --private-key <private_key_path> [--listen <listen_address:port>] [--password <private_key_password>]
-```
-
----
-
 ## 📖 Usage
 
 ### 1. Encrypt a File
