@@ -1,0 +1,12 @@
+cryptography
+numpy
+zlib
+base64
+argparse
+struct
+hashlib
+secrets
+time
+platform
+socket
+json
