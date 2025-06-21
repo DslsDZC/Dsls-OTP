@@ -2,8 +2,8 @@
 
 English / [简体中文](README_CN.md) / [日本語](README_JP.md) / [Français](README_FR.md) / [Deutsch](README_DE.md) 
 
-<img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
 ![Static Badge](https://img.shields.io/badge/License_GNU_AFFERO-0?style=for-the-badge&logo=gnu&color=8A2BE2)
+<img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
 
 ## ✨ Project Overview
 
