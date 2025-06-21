@@ -22,17 +22,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import constant_time
+from cryptography.hazmat.primitives.constant_time import secure_zero_memory
 from getpass import getpass
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import x448
-from cryptography.hazmat.primitives import serialization
 import argparse
-
-try:
-    from dilithium import Dilithium
-except ImportError:
-    print("警告: dilithium 库未安装。Dilithium 功能将不可用。")
-    Dilithium = None
 
 class SecurityError(Exception):
     pass
@@ -82,13 +74,7 @@ class DslsQuantumLib:
         }.get(mode, 32)
         
         shared_secret = secrets.token_bytes(key_size)
-        public_key_bytes = public_key.public_bytes(
-            encoding=serialization.Encoding.DER,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-
-        half_len = len(public_key_bytes) // 2
-        ciphertext = public_key_bytes[:half_len] + shared_secret
+        ciphertext = public_key[:len(public_key)//2] + shared_secret
         return ciphertext, shared_secret
 
     @staticmethod
@@ -103,54 +89,25 @@ class DslsQuantumLib:
         return shared_secret
 
     @staticmethod
-    def generate_dilithium_keypair(mode="dsls-dilithium3"):
-        if Dilithium is None:
-            raise ImportError("dilithium 库未安装")
-        if mode == "dsls-dilithium2":
-            return Dilithium.Dilithium2.keygen()
-        elif mode == "dsls-dilithium3":
-            return Dilithium.Dilithium3.keygen()
-        elif mode == "dsls-dilithium5":
-            return Dilithium.Dilithium5.keygen()
-        else:
-            return Dilithium.Dilithium3.keygen()
-
-    @staticmethod
     def dilithium_sign(private_key, data, mode="dsls-dilithium3"):
-        if Dilithium is None:
-            raise ImportError("dilithium 库未安装")
-        if mode == "dsls-dilithium2":
-            return Dilithium.Dilithium2.sign(private_key, data)
-        elif mode == "dsls-dilithium3":
-            return Dilithium.Dilithium3.sign(private_key, data)
-        elif mode == "dsls-dilithium5":
-            return Dilithium.Dilithium5.sign(private_key, data)
-        else:
-            return Dilithium.Dilithium3.sign(private_key, data)
+        sig_size = {
+            "dsls-dilithium2": 2420,
+            "dsls-dilithium3": 3309,
+            "dsls-dilithium5": 4627
+        }.get(mode, 3309)
+        
+        return secrets.token_bytes(sig_size)
 
     @staticmethod
     def dilithium_verify(public_key, data, signature, mode="dsls-dilithium3"):
-        if Dilithium is None:
-            raise ImportError("dilithium 库未安装")
-        try:
-            if mode == "dsls-dilithium2":
-                return Dilithium.Dilithium2.verify(public_key, data, signature)
-            elif mode == "dsls-dilithium3":
-                return Dilithium.Dilithium3.verify(public_key, data, signature)
-            elif mode == "dsls-dilithium5":
-                return Dilithium.Dilithium5.verify(public_key, data, signature)
-            else:
-                return Dilithium.Dilithium3.verify(public_key, data, signature)
-        except Exception as e:
-            print(f"签名验证失败: {e}")
-            return False
+        return True  # 模拟实现
 
 class SecurityConstants:
     def __init__(self, lightweight=False):
         self.session_key_length = 16 if lightweight else 32
         self.nonce_length = 8 if lightweight else 12
         self.tag_length = 8 if lightweight else 16
-        self.segment_id_size = 4
+        self.segment_id_size = 4 if lightweight else 8
         self.min_segment_size = 512
         self.max_segment_size = 4096 if lightweight else 65536
         self.salt = secrets.token_bytes(8 if lightweight else 16)
@@ -208,10 +165,10 @@ class SecurityConstants:
             sc.max_segment_size = params['max_segment_size']
             sc.salt = bytes.fromhex(params['salt'])
             sc.info = bytes.fromhex(params['info'])
-            sc.kdf_algorithm = getattr(hashes, params['kdf_algorithm'].upper())
+            sc.kdf_algorithm = getattr(hashes, params['kdf_algorithm'])
             sc.aead_algorithm = getattr(algorithms, params['aead_algorithm'])
             sc.key_expansion_algorithm = getattr(algorithms, params['key_expansion_algorithm'])
-            sc.curve = getattr(ec, params['curve'].upper())
+            sc.curve = getattr(ec, params['curve'])
             sc.version = params['version']
             sc.iteration_count = params['iteration_count']
             sc.obfuscation_seed = params['obfuscation_seed']
@@ -234,10 +191,19 @@ class HardwareDetector:
                 return False
         elif platform.system() == "Windows":
             try:
-                from ctypes import windll
-                PF_AES_INSTRUCTIONS_AVAILABLE = 17
-                return windll.kernel32.IsProcessorFeaturePresent(PF_AES_INSTRUCTIONS_AVAILABLE) != 0
-            except Exception:
+                from ctypes import windll, c_uint, byref
+                class CPUID(ctypes.WinDLL):
+                    def __init__(self):
+                        super(CPUID, self).__init__('kernel32.dll')
+                        self.IsProcessorFeaturePresent = self.windll.kernel32.IsProcessorFeaturePresent
+                        self.PF_AES_INSTRUCTIONS_AVAILABLE = 17
+                
+                cpuid = CPUID()
+                feature_present = c_uint(0)
+                if cpuid.IsProcessorFeaturePresent(cpuid.PF_AES_INSTRUCTIONS_AVAILABLE):
+                    return True
+                return False
+            except:
                 return False
         elif platform.system() == "Darwin":
             try:
@@ -259,25 +225,6 @@ class HardwareDetector:
                 with open('/proc/cpuinfo', 'r') as f:
                     cpuinfo = f.read()
                 return 'avx2' in cpuinfo
-            except:
-                return False
-        elif platform.system() == "Windows":
-            try:
-                from ctypes import windll
-
-                PF_AVX2_INSTRUCTIONS_AVAILABLE = 18
-                return windll.kernel32.IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != 0
-            except Exception:
-                return False
-        elif platform.system() == "Darwin":
-            try:
-                sysctl = ctypes.CDLL('/usr/lib/libSystem.dylib').sysctl
-                name = (ctypes.c_int * 2)(22, 0)
-                result = ctypes.c_uint(0)
-                size = ctypes.c_size_t(ctypes.sizeof(result))
-                if sysctl(name, 2, ctypes.byref(result), ctypes.byref(size), None, 0) == 0:
-                    return (result.value & (1 << 5)) != 0
-                return False
             except:
                 return False
         return False
@@ -334,26 +281,20 @@ class Dsls_OTP_FileEncryptor:
         self.backend = default_backend()
         self.bytes_encrypted = 0
         self.key_start_time = time.time()
-        self.encrypted_session_key, shared_secret = self._encrypt_session_key()
-        self.session_key = self._derive_session_key(shared_secret)
-
+        self.session_key = secrets.token_bytes(security_constants.session_key_length)
+        self.encrypted_session_key, self.encapsulated_key = self._encrypt_session_key()
+    
     def _encrypt_session_key(self):
-        encrypted_key, shared_secret = DslsQuantumLib.kyber_encapsulate(
-            self.receiver_public_key,
+        receiver_kyber_pubkey, _ = DslsQuantumLib.generate_kyber_keypair(
             self.security_constants.quantum_mode
         )
-        return encrypted_key, shared_secret
-
-    def _derive_session_key(self, shared_secret):
-        kdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=self.security_constants.session_key_length,
-            salt=self.security_constants.salt,
-            info=b'dsls-otp-session-key',
-            backend=default_backend()
+        
+        encrypted_key, encapsulated_key = DslsQuantumLib.kyber_encapsulate(
+            receiver_kyber_pubkey,
+            self.security_constants.quantum_mode
         )
-        return kdf.derive(shared_secret)
-
+        return encrypted_key, encapsulated_key
+    
     def _need_key_rotation(self):
         return (self.bytes_encrypted > self.security_constants.key_rotation_size or 
                 time.time() - self.key_start_time > self.security_constants.key_rotation_time)
@@ -425,9 +366,6 @@ class Dsls_OTP_FileEncryptor:
             
             self.segment_counter += 1
             self.bytes_encrypted += len(segment)
-            padding_len = secrets.randbelow(16)
-            padding = secrets.token_bytes(padding_len)
-            packet = bytes([padding_len]) + padding + packet
             return packet
         except SecurityError as e:
             raise e
@@ -435,7 +373,7 @@ class Dsls_OTP_FileEncryptor:
             raise SecurityError(f"数据段加密失败: {e}")
         finally:
             if isinstance(segment_key, (bytes, bytearray)):
-                SecureMemory.secure_zero_memory(segment_key)
+                secure_zero_memory(segment_key, len(segment_key))
     
     def encrypt_data(self, data):
         if not data:
@@ -465,22 +403,12 @@ class Dsls_OTP_FileEncryptor:
         return encrypted_packets
 
 class Dsls_OTP_FileDecryptor:
-    def __init__(self, security_constants, shared_secret):
+    def __init__(self, security_constants, session_key):
         self.security_constants = security_constants
+        self.session_key = session_key
         self.backend = default_backend()
         self.bytes_decrypted = 0
         self.key_start_time = time.time()
-        self.session_key = self._derive_session_key(shared_secret)
-
-    def _derive_session_key(self, shared_secret):
-        kdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=self.security_constants.session_key_length,
-            salt=self.security_constants.salt,
-            info=b'dsls-otp-session-key',
-            backend=default_backend()
-        )
-        return kdf.derive(shared_secret)
     
     def _need_key_rotation(self):
         return (self.bytes_decrypted > self.security_constants.key_rotation_size or 
@@ -505,7 +433,6 @@ class Dsls_OTP_FileDecryptor:
     
     def _decrypt_segment_key(self, nonce, enc_segment_key, tag, segment_id):
         try:
-            print(f"解密段密钥: 段ID={segment_id}, nonce={nonce.hex()}, enc_segment_key={enc_segment_key.hex()}, tag={tag.hex()}")
             algorithm = self.security_constants.aead_algorithm(self.session_key)
             
             if algorithm.name == "AES":
@@ -520,54 +447,51 @@ class Dsls_OTP_FileDecryptor:
             raise SecurityError(f"段密钥解密失败: 认证标签无效 (段ID: {segment_id})")
         except Exception as e:
             raise SecurityError(f"段密钥解密失败: {e}")
-        
+    
     def decrypt_segment(self, packet):
+        start_pos = 0
+        while start_pos < len(packet) and packet[start_pos] < 128:
+            start_pos += 1
+        packet = packet[start_pos:]
+        
+        segment_id_size = self.security_constants.segment_id_size
+        nonce_length = self.security_constants.nonce_length
+        tag_length = self.security_constants.tag_length if self.security_constants.aead_algorithm.name == "AES" else 0
+        session_key_length = self.security_constants.session_key_length
+        
+        min_packet_size = segment_id_size + 1 + nonce_length + session_key_length + tag_length
+        if len(packet) < min_packet_size:
+            raise SecurityError(f"无效的数据包长度: {len(packet)} < {min_packet_size}")
+        
+        segment_id = struct.unpack('>I', packet[:segment_id_size])[0]
+        key_rotation_flag = packet[segment_id_size]
+        offset = segment_id_size + 1
+        
+        nonce = packet[offset:offset+nonce_length]
+        offset += nonce_length
+        
+        enc_start = offset
+        enc_segment_key = packet[enc_start:enc_start+session_key_length]
+        offset += session_key_length
+        
+        tag = packet[offset:offset+tag_length] if tag_length else b''
+        offset += tag_length
+        
+        ciphertext = packet[offset:]
+        
+        new_session_key = None
+        if key_rotation_flag:
+            new_session_key = secrets.token_bytes(self.security_constants.session_key_length)
+        
+        segment_key = self._decrypt_segment_key(nonce, enc_segment_key, tag, segment_id)
+        
         try:
-            padding_len = packet[0]
-            packet = packet[1:]
-            
-            packet = packet[padding_len:]
-            
-            segment_id_size = 4
-            nonce_length = self.security_constants.nonce_length
-            tag_length = self.security_constants.tag_length if self.security_constants.aead_algorithm.name == "AES" else 0
-            session_key_length = self.security_constants.session_key_length
-            
-            min_packet_size = segment_id_size + 1 + nonce_length + session_key_length + tag_length
-            if len(packet) < min_packet_size:
-                raise SecurityError(f"无效的数据包长度: {len(packet)} < {min_packet_size}")
-            
-            segment_id = struct.unpack('>I', packet[:segment_id_size])[0]
-            key_rotation_flag = packet[segment_id_size]
-            offset = segment_id_size + 1
-            
-            nonce = packet[offset:offset+nonce_length]
-            offset += nonce_length
-            
-            enc_start = offset
-            enc_segment_key = packet[enc_start:enc_start+session_key_length]
-            offset += session_key_length
-            
-            tag = packet[offset:offset+tag_length] if tag_length else b''
-            offset += tag_length
-            
-            ciphertext = packet[offset:]
-            
-            new_session_key = None
-            if key_rotation_flag:
-                new_session_key = secrets.token_bytes(self.security_constants.session_key_length)
-            
-            segment_key = self._decrypt_segment_key(nonce, enc_segment_key, tag, segment_id)
-            
-            try:
-                expanded_key = self._expand_key(segment_key, len(ciphertext))
-                plaintext = SIMDOperations.simd_xor(ciphertext, expanded_key[:len(ciphertext)])
-                return segment_id, plaintext, new_session_key
-            finally:
-                if isinstance(segment_key, (bytes, bytearray)):
-                    SecureMemory.secure_zero_memory(segment_key)
-        except Exception as e:
-            raise SecurityError(f"数据段解密失败: {e}")
+            expanded_key = self._expand_key(segment_key, len(ciphertext))
+            plaintext = SIMDOperations.simd_xor(ciphertext, expanded_key[:len(ciphertext)])
+            return segment_id, plaintext, new_session_key
+        finally:
+            if isinstance(segment_key, (bytes, bytearray)):
+                secure_zero_memory(segment_key, len(segment_key))
     
     def decrypt_data(self, packets):
         try:
@@ -575,8 +499,6 @@ class Dsls_OTP_FileDecryptor:
             current_session_key = self.session_key
             for i, packet in enumerate(packets):
                 try:
-                    if len(packet) < 4:
-                        raise SecurityError(f"数据包 {i} 长度不足，至少需要 4 字节，实际长度: {len(packet)}")
                     segment_id, plaintext, new_session_key = self.decrypt_segment(packet)
                     
                     if new_session_key:
@@ -611,9 +533,6 @@ def generate_ecc_key_pair(curve=ec.SECP384R1):
     public_key = private_key.public_key()
     return private_key, public_key
 
-def generate_dilithium_key_pair(mode="dsls-dilithium3"):
-    return DslsQuantumLib.generate_dilithium_keypair(mode)
-
 def obfuscate_public_key(public_key, seed):
     pubkey_bytes = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
@@ -627,8 +546,7 @@ def obfuscate_public_key(public_key, seed):
     for i, b in enumerate(b64_encoded):
         mask_byte = mask[i]
         seed_byte = seed_bytes[i % len(seed_bytes)]
-        obfuscated_value = (b ^ mask_byte) + seed_byte
-        obfuscated.append(obfuscated_value & 0xFF)
+        obfuscated.append((b ^ mask_byte) + seed_byte)
     return seed_bytes + bytes(obfuscated), mask
 
 def deobfuscate_public_key(obfuscated_data, mask, seed):
@@ -637,7 +555,7 @@ def deobfuscate_public_key(obfuscated_data, mask, seed):
     for i, b in enumerate(obfuscated_data[4:]):
         mask_byte = mask[i]
         seed_byte = seed_bytes[i % len(seed_bytes)]
-        b64_encoded.append(((b - seed_byte) ^ mask_byte) & 0xFF)
+        b64_encoded.append((b - seed_byte) ^ mask_byte)
     compressed = base64.b64decode(bytes(b64_encoded))
     pubkey_bytes = zlib.decompress(compressed)
     return serialization.load_der_public_key(
@@ -726,7 +644,7 @@ class NetworkEncryptor:
                 total_sent += sent
                 self.monitor.network_update(sent=sent)
             return True
-        except (RuntimeError, Exception) as e:
+        except Exception as e:
             print(f"发送数据失败: {e}")
             return False
     
@@ -793,10 +711,8 @@ class NetworkEncryptor:
             header += obfuscated_pubkey
             header += struct.pack('>I', len(mask))
             header += mask
-            
-            encrypted_key = encryptor.encrypted_session_key
-            header += struct.pack('>I', len(encrypted_key))
-            header += encrypted_key
+            header += struct.pack('>I', len(encryptor.session_key))
+            header += encryptor.session_key
             
             if not self._send_data(header):
                 return
@@ -857,7 +773,7 @@ class NetworkDecryptor:
                 data += chunk
                 self.monitor.network_update(received=len(chunk))
             return data
-        except (RuntimeError, Exception) as e:
+        except Exception as e:
             print(f"接收数据失败: {e}")
             return None
     
@@ -911,7 +827,7 @@ class NetworkDecryptor:
             mask = self._receive_data(conn, mask_len)
             
             session_key_len = struct.unpack('>I', self._receive_data(conn, 4))[0]
-            encrypted_session_key = self._receive_data(conn, session_key_len)
+            session_key = self._receive_data(conn, session_key_len)
             
             with open(self.private_key_file, "rb") as f:
                 private_key = serialization.load_pem_private_key(
@@ -921,16 +837,10 @@ class NetworkDecryptor:
                 )
             print(f"私钥加载成功: {private_key.curve.name}")
             
-            shared_secret = DslsQuantumLib.kyber_decapsulate(
-                private_key,
-                encrypted_session_key,
-                security_constants.quantum_mode
-            )
-            
             public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
             print(f"公钥反混淆成功: {public_key.curve.name}")
             
-            decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+            decryptor = Dsls_OTP_FileDecryptor(security_constants, session_key)
             
             packets = []
             print("接收加密数据...")
@@ -973,7 +883,7 @@ class NetworkDecryptor:
         except Exception as e:
             print(f"处理连接失败: {e}")
 
-def client_encrypt(input_file, output_file, receiver_public_key_file, lightweight=False, sign_private_key_file=None):
+def client_encrypt(input_file, output_file, receiver_public_key_file, lightweight=False):
     monitor = ProtocolMonitor()
     print("=" * 70)
     print(f"Dsls-OTP 文件加密系统 ({'轻量模式' if lightweight else '标准模式'})")
@@ -991,13 +901,6 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         return
     
     security_constants = SecurityConstants(lightweight)
-    
-    if not (0 <= security_constants.obfuscation_seed < 2**32):
-        print("错误: obfuscation_seed 必须是一个 32 位无符号整数")
-        return
-    if not isinstance(receiver_public_key, ec.EllipticCurvePublicKey):
-        print("错误: receiver_public_key 必须是 EllipticCurvePublicKey 类型")
-        return
     
     encryptor = Dsls_OTP_FileEncryptor(security_constants, receiver_public_key)
     
@@ -1027,32 +930,11 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         obfuscated_pubkey, mask = obfuscate_public_key(receiver_public_key, security_constants.obfuscation_seed)
     except Exception as e:
         print(f"公钥混淆失败: {e}")
-        print(f"公钥类型: {type(receiver_public_key)}")
-        print(f"Seed: {security_constants.obfuscation_seed}")
         return
-    
-    file_signature = b''
-    if sign_private_key_file:
-        try:
-            with open(sign_private_key_file, "rb") as f:
-                sign_private_key = f.read()
-
-            file_signature = DslsQuantumLib.dilithium_sign(
-                sign_private_key, 
-                input_data, 
-                mode="dsls-dilithium3"
-            )
-            print(f"创建文件签名: {len(file_signature)} 字节")
-        except Exception as e:
-            print(f"文件签名失败: {e}")
-            return
     
     try:
         print(f"写入加密文件: {output_file}")
         with open(output_file, 'wb') as f:
-            f.write(struct.pack('>I', len(file_signature)))
-            f.write(file_signature)
-
             f.write(security_constants.file_magic)
             f.write(bytes([security_constants.file_version]))
             f.write(struct.pack('>I', len(security_constants.to_bytes())))
@@ -1061,10 +943,8 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
             f.write(obfuscated_pubkey)
             f.write(struct.pack('>I', len(mask)))
             f.write(mask)
-            
-            encrypted_key = encryptor.encrypted_session_key
-            f.write(struct.pack('>I', len(encrypted_key)))
-            f.write(encrypted_key)
+            f.write(struct.pack('>I', len(encryptor.session_key)))
+            f.write(encryptor.session_key)
             
             for packet in encrypted_packets:
                 f.write(struct.pack('>I', len(packet)))
@@ -1077,9 +957,9 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         return
     finally:
         if hasattr(encryptor, 'session_key'):
-            SecureMemory.secure_zero_memory(encryptor.session_key)
+            secure_zero_memory(encryptor.session_key, len(encryptor.session_key))
 
-def server_decrypt(input_file, output_file, private_key_file, password=None, sign_public_key_file=None):
+def server_decrypt(input_file, output_file, private_key_file, password=None):
     monitor = ProtocolMonitor()
     print("=" * 70)
     print("Dsls-OTP 文件解密系统")
@@ -1095,11 +975,6 @@ def server_decrypt(input_file, output_file, private_key_file, password=None, sig
         return
     
     offset = 0
-
-    signature_len = struct.unpack('>I', file_data[offset:offset+4])[0]
-    offset += 4
-    file_signature = file_data[offset:offset+signature_len]
-    offset += signature_len
     
     file_magic = file_data[offset:offset+4]
     offset += 4
@@ -1137,7 +1012,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None, sig
     
     session_key_len = struct.unpack('>I', file_data[offset:offset+4])[0]
     offset += 4
-    encrypted_session_key = file_data[offset:offset+session_key_len]
+    session_key = file_data[offset:offset+session_key_len]
     offset += session_key_len
     
     try:
@@ -1153,23 +1028,13 @@ def server_decrypt(input_file, output_file, private_key_file, password=None, sig
         return
     
     try:
-        shared_secret = DslsQuantumLib.kyber_decapsulate(
-            private_key,
-            encrypted_session_key,
-            security_constants.quantum_mode
-        )
-    except Exception as e:
-        print(f"会话密钥解密失败: {e}")
-        return
-    
-    try:
         public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
         print(f"公钥反混淆成功: {public_key.curve.name}")
     except Exception as e:
         print(f"公钥反混淆失败: {e}")
         return
     
-    decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+    decryptor = Dsls_OTP_FileDecryptor(security_constants, session_key)
     
     packets = []
     while offset < len(file_data):
@@ -1193,27 +1058,6 @@ def server_decrypt(input_file, output_file, private_key_file, password=None, sig
         if decrypted_data is None:
             print("解密失败")
             return
-
-        if sign_public_key_file and file_signature:
-            try:
-                with open(sign_public_key_file, "rb") as f:
-                    sign_public_key = f.read()
-
-                is_valid = DslsQuantumLib.dilithium_verify(
-                    sign_public_key, 
-                    decrypted_data, 
-                    file_signature,
-                    mode="dsls-dilithium3"
-                )
-                
-                if not is_valid:
-                    raise SecurityError("文件签名验证失败: 文件可能被篡改或来源不可信")
-                
-                print("文件签名验证成功")
-            except Exception as e:
-                print(f"签名验证错误: {e}")
-                return
-        
         print(f"解密数据大小: {len(decrypted_data)} 字节")
         monitor.update(len(decrypted_data))
     except SecurityError as e:
@@ -1231,9 +1075,9 @@ def server_decrypt(input_file, output_file, private_key_file, password=None, sig
         return
     finally:
         if hasattr(decryptor, 'session_key'):
-            SecureMemory.secure_zero_memory(decryptor.session_key)
+            secure_zero_memory(decryptor.session_key, len(decryptor.session_key))
 
-def generate_key_pair(private_key_file, public_key_file, password=None, algorithm="ecc", dilithium_mode="dsls-dilithium3"):
+def generate_key_pair(private_key_file, public_key_file, password=None):
     print("=" * 70)
     print("Dsls-OTP 密钥生成工具")
     print("=" * 70)
@@ -1248,85 +1092,58 @@ def generate_key_pair(private_key_file, public_key_file, password=None, algorith
             password = getpass("输入私钥密码: ")
             password_protected = True
     
-    if algorithm == "dilithium":
-        print(f"生成 Dilithium 密钥对 ({dilithium_mode})...")
-        try:
-            private_key, public_key = generate_dilithium_key_pair(dilithium_mode)
-
-            with open(private_key_file, 'wb') as f:
-                f.write(private_key)
-            print(f"私钥已保存到: {private_key_file}")
-
-            with open(public_key_file, 'wb') as f:
-                f.write(public_key)
-            print(f"公钥已保存到: {public_key_file}")
-            
-            if password_protected:
-                print("警告: 请牢记密码，没有密码将无法使用私钥")
-            
-            print("密钥生成完成!")
-        except Exception as e:
-            print(f"Dilithium 密钥生成失败: {e}")
-    else:
-        curve = ec.SECP384R1()
-        print(f"生成 {curve.name} ECC 密钥对...")
+    curve = ec.SECP384R1()
+    print(f"生成 {curve.name} 密钥对...")
+    
+    try:
+        private_key = ec.generate_private_key(curve, default_backend())
+        public_key = private_key.public_key()
         
-        try:
-            private_key, public_key = generate_ecc_key_pair(curve)
-            
-            encryption_algorithm = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
-            private_pem = private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=encryption_algorithm
-            )
-            with open(private_key_file, 'wb') as f:
-                f.write(private_pem)
-            print(f"私钥已保存到: {private_key_file}")
-            
-            public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            )
-            with open(public_key_file, 'wb') as f:
-                f.write(public_pem)
-            print(f"公钥已保存到: {public_key_file}")
-            
-            if password_protected:
-                print("警告: 请牢记密码，没有密码将无法使用私钥")
-            
-            print("密钥生成完成!")
-        except Exception as e:
-            print(f"ECC 密钥生成失败: {e}")
+        encryption_algorithm = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
+        private_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=encryption_algorithm
+        )
+        with open(private_key_file, 'wb') as f:
+            f.write(private_pem)
+        print(f"私钥已保存到: {private_key_file}")
+        
+        public_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        with open(public_key_file, 'wb') as f:
+            f.write(public_pem)
+        print(f"公钥已保存到: {public_key_file}")
+        
+        if password_protected:
+            print("警告: 请牢记密码，没有密码将无法使用私钥")
+        
+        print("密钥生成完成!")
+    except Exception as e:
+        print(f"密钥生成失败: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Dsls-OTP 文件加密/解密与网络传输系统",
-        usage="python dsls-otp.py {encrypt,decrypt,keygen,send,receive} ..."
-    )
-    subparsers = parser.add_subparsers(dest="command", help="可用命令")
+    parser = argparse.ArgumentParser(description="Dsls-OTP 文件加密/解密与网络传输系统")
+    subparsers = parser.add_subparsers(dest="command", help="可用命令", required=True)
     
     encrypt_parser = subparsers.add_parser("encrypt", help="加密文件")
     encrypt_parser.add_argument("input", help="输入文件路径")
     encrypt_parser.add_argument("output", help="输出文件路径")
     encrypt_parser.add_argument("--receiver-key", required=True, help="接收方公钥文件路径")
     encrypt_parser.add_argument("--lightweight", action="store_true", help="使用轻量级模式")
-    encrypt_parser.add_argument("--sign-key", dest="sign_private_key_file", help="用于签名的私钥文件路径 (Dilithium)")
     
     decrypt_parser = subparsers.add_parser("decrypt", help="解密文件")
     decrypt_parser.add_argument("input", help="输入文件路径")
     decrypt_parser.add_argument("output", help="输出文件路径")
     decrypt_parser.add_argument("--private-key", required=True, help="私钥文件路径")
     decrypt_parser.add_argument("--password", help="私钥密码（如有）")
-    decrypt_parser.add_argument("--sign-key", dest="sign_public_key_file", help="用于验证签名的公钥文件路径 (Dilithium)")
     
     keygen_parser = subparsers.add_parser("keygen", help="生成密钥对")
     keygen_parser.add_argument("--private-key", default="private_key.pem", help="私钥保存路径")
     keygen_parser.add_argument("--public-key", default="public_key.pem", help="公钥保存路径")
     keygen_parser.add_argument("--password", help="私钥密码（如有）")
-    keygen_parser.add_argument("--algorithm", choices=["ecc", "dilithium"], default="ecc", help="密钥算法 (默认: ecc)")
-    keygen_parser.add_argument("--dilithium-mode", choices=["dsls-dilithium2", "dsls-dilithium3", "dsls-dilithium5"], 
-                           default="dsls-dilithium3", help="Dilithium 安全模式 (默认: dsls-dilithium3)")
     
     send_parser = subparsers.add_parser("send", help="通过网络发送加密文件")
     send_parser.add_argument("input", help="输入文件路径")
@@ -1341,17 +1158,13 @@ if __name__ == "__main__":
     receive_parser.add_argument("--password", help="私钥密码（如有）")
     
     args = parser.parse_args()
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
+    
     if args.command == "encrypt":
-        client_encrypt(args.input, args.output, args.receiver_key, args.lightweight, args.sign_private_key_file)
+        client_encrypt(args.input, args.output, args.receiver_key, args.lightweight)
     elif args.command == "decrypt":
-        server_decrypt(args.input, args.output, args.private_key, args.password, args.sign_public_key_file)
+        server_decrypt(args.input, args.output, args.private_key, args.password)
     elif args.command == "keygen":
-        generate_key_pair(args.private_key, args.public_key, args.password, args.algorithm, args.dilithium_mode)
+        generate_key_pair(args.private_key, args.public_key, args.password)
     elif args.command == "send":
         target_parts = args.target.split(':')
         if len(target_parts) != 2:
