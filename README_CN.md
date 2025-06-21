@@ -2,6 +2,9 @@
 
 [English](README.md) / 简体中文 / [日本語](README_JP.md) / [Français](README_FR.md) / [Deutsch](README_DE.md)
 
+![Static Badge](https://img.shields.io/badge/License_GNU_AFFERO-0?logo=gnu&color=8A2BE2)
+<img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
+
 ## ✨ 项目概述
 
 Dsls-OTP 是一种基于一次性密码本（OTP）加密优化的量子抗性网络加密解决方案。通过结合优化的 OTP 机制、现代加密算法和量子抗性技术，它提供了卓越的数据保护能力。内置的网络传输功能使得安全文件传输变得简单高效，适应各种网络环境。
