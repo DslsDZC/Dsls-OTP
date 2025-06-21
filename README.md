@@ -1,7 +1,7 @@
 # Dsls-OTP: A Quantum-Resistant Network Encryption Optimized with OTP
 
 English / [简体中文](README_CN.md) / [日本語](README_JP.md) / [Français](README_FR.md) / [Deutsch](README_DE.md) 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/DslsDZC/Dsls-OTP)](https://github.com/DslsDZC/Dsls-OTP/releases/latest)
+
 <img src="https://img.shields.io/badge/python-3.10 ~ 3.13 -blue.svg" alt="python">
 
 ## ✨ Project Overview
