@@ -29,12 +29,11 @@ Whether for resource-constrained embedded devices or high-performance standard a
 ```
 Dsls-OTP/
 ├── python/
-<<<<<<< HEAD
 │   ├── dsls-otp.py       # Main program file
 │   ├── requirements.txt  # Dependency list
 ├── README.md             # Project documentation
 ├── LICENSE               # License file
-
+```
 ---
 
 ## 📖 Usage Guide
