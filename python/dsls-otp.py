@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import constant_time
-from cryptography.hazmat.primitives.constant_time import secure_zero_memory
 from getpass import getpass
 import argparse
 
@@ -74,7 +73,15 @@ class DslsQuantumLib:
         }.get(mode, 32)
         
         shared_secret = secrets.token_bytes(key_size)
-        ciphertext = public_key[:len(public_key)//2] + shared_secret
+        # 将公钥对象序列化为字节
+        public_key_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        # 使用序列化后的字节进行操作
+        half_len = len(public_key_bytes) // 2
+        ciphertext = public_key_bytes[:half_len] + shared_secret
         return ciphertext, shared_secret
 
     @staticmethod
@@ -191,19 +198,10 @@ class HardwareDetector:
                 return False
         elif platform.system() == "Windows":
             try:
-                from ctypes import windll, c_uint, byref
-                class CPUID(ctypes.WinDLL):
-                    def __init__(self):
-                        super(CPUID, self).__init__('kernel32.dll')
-                        self.IsProcessorFeaturePresent = self.windll.kernel32.IsProcessorFeaturePresent
-                        self.PF_AES_INSTRUCTIONS_AVAILABLE = 17
-                
-                cpuid = CPUID()
-                feature_present = c_uint(0)
-                if cpuid.IsProcessorFeaturePresent(cpuid.PF_AES_INSTRUCTIONS_AVAILABLE):
-                    return True
-                return False
-            except:
+                from ctypes import windll
+                PF_AES_INSTRUCTIONS_AVAILABLE = 17
+                return windll.kernel32.IsProcessorFeaturePresent(PF_AES_INSTRUCTIONS_AVAILABLE) != 0
+            except Exception:
                 return False
         elif platform.system() == "Darwin":
             try:
@@ -225,6 +223,24 @@ class HardwareDetector:
                 with open('/proc/cpuinfo', 'r') as f:
                     cpuinfo = f.read()
                 return 'avx2' in cpuinfo
+            except:
+                return False
+        elif platform.system() == "Windows":
+            try:
+                from ctypes import windll
+                PF_AVX2_INSTRUCTIONS_AVAILABLE = 18
+                return windll.kernel32.IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != 0
+            except Exception:
+                return False
+        elif platform.system() == "Darwin":
+            try:
+                sysctl = ctypes.CDLL('/usr/lib/libSystem.dylib').sysctl
+                name = (ctypes.c_int * 2)(22, 0)
+                result = ctypes.c_uint(0)
+                size = ctypes.c_size_t(ctypes.sizeof(result))
+                if sysctl(name, 2, ctypes.byref(result), ctypes.byref(size), None, 0) == 0:
+                    return (result.value & (1 << 5)) != 0
+                return False
             except:
                 return False
         return False
@@ -285,12 +301,8 @@ class Dsls_OTP_FileEncryptor:
         self.encrypted_session_key, self.encapsulated_key = self._encrypt_session_key()
     
     def _encrypt_session_key(self):
-        receiver_kyber_pubkey, _ = DslsQuantumLib.generate_kyber_keypair(
-            self.security_constants.quantum_mode
-        )
-        
         encrypted_key, encapsulated_key = DslsQuantumLib.kyber_encapsulate(
-            receiver_kyber_pubkey,
+            self.receiver_public_key,
             self.security_constants.quantum_mode
         )
         return encrypted_key, encapsulated_key
@@ -373,7 +385,7 @@ class Dsls_OTP_FileEncryptor:
             raise SecurityError(f"数据段加密失败: {e}")
         finally:
             if isinstance(segment_key, (bytes, bytearray)):
-                secure_zero_memory(segment_key, len(segment_key))
+                SecureMemory.secure_zero_memory(segment_key)
     
     def encrypt_data(self, data):
         if not data:
@@ -491,7 +503,7 @@ class Dsls_OTP_FileDecryptor:
             return segment_id, plaintext, new_session_key
         finally:
             if isinstance(segment_key, (bytes, bytearray)):
-                secure_zero_memory(segment_key, len(segment_key))
+                SecureMemory.secure_zero_memory(segment_key)
     
     def decrypt_data(self, packets):
         try:
@@ -546,7 +558,8 @@ def obfuscate_public_key(public_key, seed):
     for i, b in enumerate(b64_encoded):
         mask_byte = mask[i]
         seed_byte = seed_bytes[i % len(seed_bytes)]
-        obfuscated.append((b ^ mask_byte) + seed_byte)
+        obfuscated_value = (b ^ mask_byte) + seed_byte
+        obfuscated.append(obfuscated_value & 0xFF)
     return seed_bytes + bytes(obfuscated), mask
 
 def deobfuscate_public_key(obfuscated_data, mask, seed):
@@ -644,7 +657,7 @@ class NetworkEncryptor:
                 total_sent += sent
                 self.monitor.network_update(sent=sent)
             return True
-        except Exception as e:
+        except (RuntimeError, Exception) as e:
             print(f"发送数据失败: {e}")
             return False
     
@@ -773,7 +786,7 @@ class NetworkDecryptor:
                 data += chunk
                 self.monitor.network_update(received=len(chunk))
             return data
-        except Exception as e:
+        except (RuntimeError, Exception) as e:
             print(f"接收数据失败: {e}")
             return None
     
@@ -902,6 +915,13 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
     
     security_constants = SecurityConstants(lightweight)
     
+    if not (0 <= security_constants.obfuscation_seed < 2**32):
+        print("错误: obfuscation_seed 必须是一个 32 位无符号整数")
+        return
+    if not isinstance(receiver_public_key, ec.EllipticCurvePublicKey):
+        print("错误: receiver_public_key 必须是 EllipticCurvePublicKey 类型")
+        return
+    
     encryptor = Dsls_OTP_FileEncryptor(security_constants, receiver_public_key)
     
     try:
@@ -930,6 +950,8 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         obfuscated_pubkey, mask = obfuscate_public_key(receiver_public_key, security_constants.obfuscation_seed)
     except Exception as e:
         print(f"公钥混淆失败: {e}")
+        print(f"公钥类型: {type(receiver_public_key)}")
+        print(f"Seed: {security_constants.obfuscation_seed}")
         return
     
     try:
@@ -957,7 +979,7 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         return
     finally:
         if hasattr(encryptor, 'session_key'):
-            secure_zero_memory(encryptor.session_key, len(encryptor.session_key))
+            SecureMemory.secure_zero_memory(encryptor.session_key)
 
 def server_decrypt(input_file, output_file, private_key_file, password=None):
     monitor = ProtocolMonitor()
@@ -1075,7 +1097,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         return
     finally:
         if hasattr(decryptor, 'session_key'):
-            secure_zero_memory(decryptor.session_key, len(decryptor.session_key))
+            SecureMemory.secure_zero_memory(decryptor.session_key)
 
 def generate_key_pair(private_key_file, public_key_file, password=None):
     print("=" * 70)
@@ -1125,8 +1147,11 @@ def generate_key_pair(private_key_file, public_key_file, password=None):
         print(f"密钥生成失败: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Dsls-OTP 文件加密/解密与网络传输系统")
-    subparsers = parser.add_subparsers(dest="command", help="可用命令", required=True)
+    parser = argparse.ArgumentParser(
+        description="Dsls-OTP 文件加密/解密与网络传输系统",
+        usage="python dsls-otp.py {encrypt,decrypt,keygen,send,receive} ..."
+    )
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
     
     encrypt_parser = subparsers.add_parser("encrypt", help="加密文件")
     encrypt_parser.add_argument("input", help="输入文件路径")
@@ -1158,7 +1183,11 @@ if __name__ == "__main__":
     receive_parser.add_argument("--password", help="私钥密码（如有）")
     
     args = parser.parse_args()
-    
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
     if args.command == "encrypt":
         client_encrypt(args.input, args.output, args.receiver_key, args.lightweight)
     elif args.command == "decrypt":
