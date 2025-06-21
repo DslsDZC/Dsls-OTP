@@ -28,6 +28,12 @@ from cryptography.hazmat.primitives.asymmetric import x448
 from cryptography.hazmat.primitives import serialization
 import argparse
 
+try:
+    from dilithium import Dilithium
+except ImportError:
+    print("警告: dilithium 库未安装。Dilithium 功能将不可用。")
+    Dilithium = None
+
 class SecurityError(Exception):
     pass
 
@@ -97,28 +103,44 @@ class DslsQuantumLib:
         return shared_secret
 
     @staticmethod
+    def generate_dilithium_keypair(mode="dsls-dilithium3"):
+        if Dilithium is None:
+            raise ImportError("dilithium 库未安装")
+        if mode == "dsls-dilithium2":
+            return Dilithium.Dilithium2.keygen()
+        elif mode == "dsls-dilithium3":
+            return Dilithium.Dilithium3.keygen()
+        elif mode == "dsls-dilithium5":
+            return Dilithium.Dilithium5.keygen()
+        else:
+            return Dilithium.Dilithium3.keygen()
+
+    @staticmethod
     def dilithium_sign(private_key, data, mode="dsls-dilithium3"):
-        sig_size = {
-            "dsls-dilithium2": 2420,
-            "dsls-dilithium3": 3309,
-            "dsls-dilithium5": 4627
-        }.get(mode, 3309)
-        
-        return secrets.token_bytes(sig_size)
+        if Dilithium is None:
+            raise ImportError("dilithium 库未安装")
+        if mode == "dsls-dilithium2":
+            return Dilithium.Dilithium2.sign(private_key, data)
+        elif mode == "dsls-dilithium3":
+            return Dilithium.Dilithium3.sign(private_key, data)
+        elif mode == "dsls-dilithium5":
+            return Dilithium.Dilithium5.sign(private_key, data)
+        else:
+            return Dilithium.Dilithium3.sign(private_key, data)
 
     @staticmethod
     def dilithium_verify(public_key, data, signature, mode="dsls-dilithium3"):
+        if Dilithium is None:
+            raise ImportError("dilithium 库未安装")
         try:
-
-            # 将公钥从PEM格式加载
-            public_key = serialization.load_der_public_key(
-            public_key,
-            backend=default_backend()
-            )
-
-            # 验证签名
-            # public_key.verify(signature, data, ec.ECDSA(hashes.SHA256()))
-            return True
+            if mode == "dsls-dilithium2":
+                return Dilithium.Dilithium2.verify(public_key, data, signature)
+            elif mode == "dsls-dilithium3":
+                return Dilithium.Dilithium3.verify(public_key, data, signature)
+            elif mode == "dsls-dilithium5":
+                return Dilithium.Dilithium5.verify(public_key, data, signature)
+            else:
+                return Dilithium.Dilithium3.verify(public_key, data, signature)
         except Exception as e:
             print(f"签名验证失败: {e}")
             return False
@@ -589,6 +611,9 @@ def generate_ecc_key_pair(curve=ec.SECP384R1):
     public_key = private_key.public_key()
     return private_key, public_key
 
+def generate_dilithium_key_pair(mode="dsls-dilithium3"):
+    return DslsQuantumLib.generate_dilithium_keypair(mode)
+
 def obfuscate_public_key(public_key, seed):
     pubkey_bytes = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
@@ -948,7 +973,7 @@ class NetworkDecryptor:
         except Exception as e:
             print(f"处理连接失败: {e}")
 
-def client_encrypt(input_file, output_file, receiver_public_key_file, lightweight=False):
+def client_encrypt(input_file, output_file, receiver_public_key_file, lightweight=False, sign_private_key_file=None):
     monitor = ProtocolMonitor()
     print("=" * 70)
     print(f"Dsls-OTP 文件加密系统 ({'轻量模式' if lightweight else '标准模式'})")
@@ -1006,9 +1031,28 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         print(f"Seed: {security_constants.obfuscation_seed}")
         return
     
+    file_signature = b''
+    if sign_private_key_file:
+        try:
+            with open(sign_private_key_file, "rb") as f:
+                sign_private_key = f.read()
+
+            file_signature = DslsQuantumLib.dilithium_sign(
+                sign_private_key, 
+                input_data, 
+                mode="dsls-dilithium3"
+            )
+            print(f"创建文件签名: {len(file_signature)} 字节")
+        except Exception as e:
+            print(f"文件签名失败: {e}")
+            return
+    
     try:
         print(f"写入加密文件: {output_file}")
         with open(output_file, 'wb') as f:
+            f.write(struct.pack('>I', len(file_signature)))
+            f.write(file_signature)
+
             f.write(security_constants.file_magic)
             f.write(bytes([security_constants.file_version]))
             f.write(struct.pack('>I', len(security_constants.to_bytes())))
@@ -1035,7 +1079,7 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         if hasattr(encryptor, 'session_key'):
             SecureMemory.secure_zero_memory(encryptor.session_key)
 
-def server_decrypt(input_file, output_file, private_key_file, password=None):
+def server_decrypt(input_file, output_file, private_key_file, password=None, sign_public_key_file=None):
     monitor = ProtocolMonitor()
     print("=" * 70)
     print("Dsls-OTP 文件解密系统")
@@ -1051,6 +1095,11 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         return
     
     offset = 0
+
+    signature_len = struct.unpack('>I', file_data[offset:offset+4])[0]
+    offset += 4
+    file_signature = file_data[offset:offset+signature_len]
+    offset += signature_len
     
     file_magic = file_data[offset:offset+4]
     offset += 4
@@ -1144,6 +1193,27 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         if decrypted_data is None:
             print("解密失败")
             return
+
+        if sign_public_key_file and file_signature:
+            try:
+                with open(sign_public_key_file, "rb") as f:
+                    sign_public_key = f.read()
+
+                is_valid = DslsQuantumLib.dilithium_verify(
+                    sign_public_key, 
+                    decrypted_data, 
+                    file_signature,
+                    mode="dsls-dilithium3"
+                )
+                
+                if not is_valid:
+                    raise SecurityError("文件签名验证失败: 文件可能被篡改或来源不可信")
+                
+                print("文件签名验证成功")
+            except Exception as e:
+                print(f"签名验证错误: {e}")
+                return
+        
         print(f"解密数据大小: {len(decrypted_data)} 字节")
         monitor.update(len(decrypted_data))
     except SecurityError as e:
@@ -1163,7 +1233,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         if hasattr(decryptor, 'session_key'):
             SecureMemory.secure_zero_memory(decryptor.session_key)
 
-def generate_key_pair(private_key_file, public_key_file, password=None):
+def generate_key_pair(private_key_file, public_key_file, password=None, algorithm="ecc", dilithium_mode="dsls-dilithium3"):
     print("=" * 70)
     print("Dsls-OTP 密钥生成工具")
     print("=" * 70)
@@ -1178,37 +1248,56 @@ def generate_key_pair(private_key_file, public_key_file, password=None):
             password = getpass("输入私钥密码: ")
             password_protected = True
     
-    curve = ec.SECP384R1()
-    print(f"生成 {curve.name} 密钥对...")
-    
-    try:
-        private_key = ec.generate_private_key(curve, default_backend())
-        public_key = private_key.public_key()
+    if algorithm == "dilithium":
+        print(f"生成 Dilithium 密钥对 ({dilithium_mode})...")
+        try:
+            private_key, public_key = generate_dilithium_key_pair(dilithium_mode)
+
+            with open(private_key_file, 'wb') as f:
+                f.write(private_key)
+            print(f"私钥已保存到: {private_key_file}")
+
+            with open(public_key_file, 'wb') as f:
+                f.write(public_key)
+            print(f"公钥已保存到: {public_key_file}")
+            
+            if password_protected:
+                print("警告: 请牢记密码，没有密码将无法使用私钥")
+            
+            print("密钥生成完成!")
+        except Exception as e:
+            print(f"Dilithium 密钥生成失败: {e}")
+    else:
+        curve = ec.SECP384R1()
+        print(f"生成 {curve.name} ECC 密钥对...")
         
-        encryption_algorithm = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
-        private_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=encryption_algorithm
-        )
-        with open(private_key_file, 'wb') as f:
-            f.write(private_pem)
-        print(f"私钥已保存到: {private_key_file}")
-        
-        public_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        with open(public_key_file, 'wb') as f:
-            f.write(public_pem)
-        print(f"公钥已保存到: {public_key_file}")
-        
-        if password_protected:
-            print("警告: 请牢记密码，没有密码将无法使用私钥")
-        
-        print("密钥生成完成!")
-    except Exception as e:
-        print(f"密钥生成失败: {e}")
+        try:
+            private_key, public_key = generate_ecc_key_pair(curve)
+            
+            encryption_algorithm = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
+            private_pem = private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=encryption_algorithm
+            )
+            with open(private_key_file, 'wb') as f:
+                f.write(private_pem)
+            print(f"私钥已保存到: {private_key_file}")
+            
+            public_pem = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            with open(public_key_file, 'wb') as f:
+                f.write(public_pem)
+            print(f"公钥已保存到: {public_key_file}")
+            
+            if password_protected:
+                print("警告: 请牢记密码，没有密码将无法使用私钥")
+            
+            print("密钥生成完成!")
+        except Exception as e:
+            print(f"ECC 密钥生成失败: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -1222,17 +1311,22 @@ if __name__ == "__main__":
     encrypt_parser.add_argument("output", help="输出文件路径")
     encrypt_parser.add_argument("--receiver-key", required=True, help="接收方公钥文件路径")
     encrypt_parser.add_argument("--lightweight", action="store_true", help="使用轻量级模式")
+    encrypt_parser.add_argument("--sign-key", dest="sign_private_key_file", help="用于签名的私钥文件路径 (Dilithium)")
     
     decrypt_parser = subparsers.add_parser("decrypt", help="解密文件")
     decrypt_parser.add_argument("input", help="输入文件路径")
     decrypt_parser.add_argument("output", help="输出文件路径")
     decrypt_parser.add_argument("--private-key", required=True, help="私钥文件路径")
     decrypt_parser.add_argument("--password", help="私钥密码（如有）")
+    decrypt_parser.add_argument("--sign-key", dest="sign_public_key_file", help="用于验证签名的公钥文件路径 (Dilithium)")
     
     keygen_parser = subparsers.add_parser("keygen", help="生成密钥对")
     keygen_parser.add_argument("--private-key", default="private_key.pem", help="私钥保存路径")
     keygen_parser.add_argument("--public-key", default="public_key.pem", help="公钥保存路径")
     keygen_parser.add_argument("--password", help="私钥密码（如有）")
+    keygen_parser.add_argument("--algorithm", choices=["ecc", "dilithium"], default="ecc", help="密钥算法 (默认: ecc)")
+    keygen_parser.add_argument("--dilithium-mode", choices=["dsls-dilithium2", "dsls-dilithium3", "dsls-dilithium5"], 
+                           default="dsls-dilithium3", help="Dilithium 安全模式 (默认: dsls-dilithium3)")
     
     send_parser = subparsers.add_parser("send", help="通过网络发送加密文件")
     send_parser.add_argument("input", help="输入文件路径")
@@ -1253,11 +1347,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if args.command == "encrypt":
-        client_encrypt(args.input, args.output, args.receiver_key, args.lightweight)
+        client_encrypt(args.input, args.output, args.receiver_key, args.lightweight, args.sign_private_key_file)
     elif args.command == "decrypt":
-        server_decrypt(args.input, args.output, args.private_key, args.password)
+        server_decrypt(args.input, args.output, args.private_key, args.password, args.sign_public_key_file)
     elif args.command == "keygen":
-        generate_key_pair(args.private_key, args.public_key, args.password)
+        generate_key_pair(args.private_key, args.public_key, args.password, args.algorithm, args.dilithium_mode)
     elif args.command == "send":
         target_parts = args.target.split(':')
         if len(target_parts) != 2:
