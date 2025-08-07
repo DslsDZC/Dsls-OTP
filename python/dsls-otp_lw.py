@@ -345,16 +345,19 @@ class QuantumSecureEncryptor:
         self.key_vault = KeyVault()
         self.receiver_pub_key = receiver_pub_key
         self.security_constants = security_constants
+        self.encapsulated_key = None
+    
+    def encapsulate_key(self, key):
+        encapsulated_key, shared_secret = self._encapsulate_key(key)
+        key_id = secrets.token_hex(16)
+        self.key_vault.add_key(key_id, shared_secret)
+        return key_id, encapsulated_key
     
     def encrypt_segment(self, segment):
         true_random_key = QOTPGenerator.generate_key(len(segment))
-        key_id = secrets.token_hex(16)
+        key_id, encapsulated_key = self.encapsulate_key(true_random_key)
         
         ciphertext = QOTPGenerator.encrypt(segment, true_random_key)
-        
-        encapsulated_key, shared_secret = self._encapsulate_key(true_random_key)
-        
-        self.key_vault.add_key(key_id, shared_secret)
         
         return {
             "key_id": key_id,
@@ -367,7 +370,6 @@ class QuantumSecureEncryptor:
             self.receiver_pub_key,
             mode=self.security_constants.quantum_mode
         )
-
     def _derive_shared_secret(self, shared_secret):
         kdf = HKDF(
             algorithm=hashes.SHA256(),
@@ -417,6 +419,7 @@ class QuantumSecureDecryptor:
             backend=default_backend()
         )
         return kdf.derive(shared_secret)
+    
 class Dsls_OTP_FileEncryptor:
     def __init__(self, security_constants, receiver_public_key):
         self.security_constants = security_constants
@@ -426,6 +429,7 @@ class Dsls_OTP_FileEncryptor:
         self.bytes_encrypted = 0
         self.key_start_time = time.time()
         self.quantum_encryptor = QuantumSecureEncryptor(receiver_public_key, security_constants)
+        self.encrypted_session_key = None  # 用于文件头的封装密钥
 
     def encrypt_segment(self, segment):
         if len(segment) == 0:
@@ -445,6 +449,24 @@ class Dsls_OTP_FileEncryptor:
         except Exception as e:
             raise SecurityError(f"数据段加密失败: {e}")
 
+    def encrypt_data(self, data):
+        session_key = QOTPGenerator.generate_key(self.security_constants.session_key_length)
+        
+        key_id, self.encrypted_session_key = self.quantum_encryptor.encapsulate_key(session_key)
+        
+        file_hash = hashlib.sha256(data).digest()
+        full_data = file_hash + data
+        segment_size = self.security_constants.max_segment_size
+        packets = []
+        
+        for i in range(0, len(full_data), segment_size):
+            segment = full_data[i:i+segment_size]
+            packet = self.encrypt_segment(segment)
+            if packet:
+                packets.append(packet)
+        
+        return packets
+    
 class Dsls_OTP_FileDecryptor:
     def __init__(self, security_constants, private_key):
         self.security_constants = security_constants
@@ -892,19 +914,28 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
     try:
         print(f"写入加密文件: {output_file}")
         with open(output_file, 'wb') as f:
+            # 写入文件头
             f.write(security_constants.file_magic)
             f.write(bytes([security_constants.file_version]))
-            f.write(struct.pack('>I', len(security_constants.to_bytes())))
-            f.write(security_constants.to_bytes())
+            
+            # 写入安全参数
+            sc_bytes = security_constants.to_bytes()
+            f.write(struct.pack('>I', len(sc_bytes)))
+            f.write(sc_bytes)
+            
+            # 写入混淆后的公钥和掩码
+            obfuscated_pubkey, mask = obfuscate_public_key(receiver_public_key, security_constants.obfuscation_seed)
             f.write(struct.pack('>I', len(obfuscated_pubkey)))
             f.write(obfuscated_pubkey)
             f.write(struct.pack('>I', len(mask)))
             f.write(mask)
             
+            # 写入封装后的会话密钥
             encrypted_key = encryptor.encrypted_session_key
             f.write(struct.pack('>I', len(encrypted_key)))
             f.write(encrypted_key)
             
+            # 写入数据包
             for packet in encrypted_packets:
                 f.write(struct.pack('>I', len(packet)))
                 f.write(packet)
@@ -915,8 +946,12 @@ def client_encrypt(input_file, output_file, receiver_public_key_file, lightweigh
         print(f"写入文件失败: {e}")
         return
     finally:
+        # 安全擦除内存中的敏感数据
         if hasattr(encryptor, 'session_key'):
             SecureMemory.secure_zero_memory(encryptor.session_key)
+        if hasattr(encryptor.quantum_encryptor, 'key_vault'):
+            for key_id in list(encryptor.quantum_encryptor.key_vault.keys.keys()):
+                encryptor.quantum_encryptor.key_vault.destroy_key(key_id)
 
 def server_decrypt(input_file, output_file, private_key_file, password=None):
     monitor = ProtocolMonitor()
