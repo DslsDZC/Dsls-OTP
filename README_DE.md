@@ -40,12 +40,12 @@ Dsls-OTP/
 
 ### 1. Datei verschlüsseln
 ```bash
-python dsls-otp.py encrypt --input <Eingabedateipfad> --output <Ausgabedateipfad> --receiver-key <Empfänger-Öffentlicher-Schlüssel-Dateipfad> [--lightweight]
+python dsls-otp.py encrypt <Eingabedateipfad> <Ausgabedateipfad> --receiver-key <Empfänger-Öffentlicher-Schlüssel-Dateipfad> [--lightweight]
 ```
 
 ### 2. Datei entschlüsseln
 ```bash
-python dsls-otp.py decrypt --input <Eingabedateipfad> --output <Ausgabedateipfad> --private-key <Privater-Schlüssel-Dateipfad> [--password <Privater-Schlüssel-Passwort>]
+python dsls-otp.py decrypt <Eingabedateipfad> <Ausgabedateipfad> --private-key <Privater-Schlüssel-Dateipfad> [--password <Privater-Schlüssel-Passwort>]
 ```
 
 ### 3. Schlüsselpaar generieren
@@ -55,12 +55,12 @@ python dsls-otp.py keygen --private-key <Privater-Schlüssel-Speicherpfad> --pub
 
 ### 4. Verschlüsselte Datei über das Netzwerk senden
 ```bash
-python dsls-otp.py send --input <Eingabedateipfad> --receiver-key <Empfänger-Öffentlicher-Schlüssel-Dateipfad> --target <Ziel-IP:Port> [--lightweight]
+python dsls-otp.py send <Eingabedateipfad> --receiver-key <Empfänger-Öffentlicher-Schlüssel-Dateipfad> --target <Ziel-IP:Port> [--lightweight]
 ```
 
 ### 5. Netzwerkdatei empfangen und entschlüsseln
 ```bash
-python dsls-otp.py receive --output <Ausgabedateipfad> --private-key <Privater-Schlüssel-Dateipfad> [--listen <Listen-Adresse:Port>] [--password <Privater-Schlüssel-Passwort>]
+python dsls-otp.py receive <Ausgabedateipfad> --private-key <Privater-Schlüssel-Dateipfad> [--listen <Listen-Adresse:Port>] [--password <Privater-Schlüssel-Passwort>]
 ```
 
 ---

@@ -40,12 +40,12 @@ Dsls-OTP/
 
 ### 1. Chiffrer un fichier
 ```bash
-python dsls-otp.py encrypt --input <chemin du fichier d'entrée> --output <chemin du fichier de sortie> --receiver-key <chemin du fichier de clé publique du destinataire> [--lightweight]
+python dsls-otp.py encrypt <chemin du fichier d'entrée> <chemin du fichier de sortie> --receiver-key <chemin du fichier de clé publique du destinataire> [--lightweight]
 ```
 
 ### 2. Déchiffrer un fichier
 ```bash
-python dsls-otp.py decrypt --input <chemin du fichier d'entrée> --output <chemin du fichier de sortie> --private-key <chemin du fichier de clé privée> [--password <mot de passe de la clé privée>]
+python dsls-otp.py decrypt <chemin du fichier d'entrée> <chemin du fichier de sortie> --private-key <chemin du fichier de clé privée> [--password <mot de passe de la clé privée>]
 ```
 
 ### 3. Générer une paire de clés
@@ -55,12 +55,12 @@ python dsls-otp.py keygen --private-key <chemin de sauvegarde de la clé privée
 
 ### 4. Envoyer un fichier chiffré via le réseau
 ```bash
-python dsls-otp.py send --input <chemin du fichier d'entrée> --receiver-key <chemin du fichier de clé publique du destinataire> --target <IP:port cible> [--lightweight]
+python dsls-otp.py send <chemin du fichier d'entrée> --receiver-key <chemin du fichier de clé publique du destinataire> --target <IP:port cible> [--lightweight]
 ```
 
 ### 5. Recevoir et déchiffrer un fichier réseau
 ```bash
-python dsls-otp.py receive --output <chemin du fichier de sortie> --private-key <chemin du fichier de clé privée> [--listen <adresse:port d'écoute>] [--password <mot de passe de la clé privée>]
+python dsls-otp.py receive <chemin du fichier de sortie> --private-key <chemin du fichier de clé privée> [--listen <adresse:port d'écoute>] [--password <mot de passe de la clé privée>]
 ```
 
 ---

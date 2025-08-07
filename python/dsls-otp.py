@@ -354,7 +354,6 @@ class QuantumSecureEncryptor:
         
         encapsulated_key, shared_secret = self._encapsulate_key(true_random_key)
         
-        self.key_vault.add_key(key_id, shared_secret)
         
         return {
             "key_id": key_id,
@@ -384,29 +383,21 @@ class QuantumSecureDecryptor:
         self.key_vault = KeyVault()
         self.security_constants = security_constants
     
-    def decrypt_segment(self, encrypted_segment):
+    def decrypt_segment(self, encrypted_data):
         shared_secret = DslsQuantumLib.kyber_decapsulate(
-            self.private_key,
-            encrypted_segment["encapsulated_key"],
-            mode=self.security_constants.quantum_mode
+        self.private_key,
+        encrypted_data["encapsulated_key"],
+        mode=self.security_constants.quantum_mode
         )
-        
         derived_key = self._derive_shared_secret(shared_secret)
-        
-        key_id = encrypted_segment["key_id"]
-        key = self.key_vault.get_key(key_id)
-        if key is None or len(key) < len(encrypted_segment["ciphertext"]):
-            raise SecurityError("无效的密钥或密钥长度不足")
-        
-        ciphertext = encrypted_segment["ciphertext"]
-        plaintext = QOTPGenerator.decrypt(
-            ciphertext,
-            key[:len(ciphertext)]
-        )
-        
-        self.key_vault.destroy_key(key_id)
-        
+    
+        ciphertext = encrypted_data["ciphertext"]
+        if len(derived_key) < len(ciphertext):
+            raise SecurityError("密钥长度不足，无法解密")
+    
+        plaintext = QOTPGenerator.decrypt(ciphertext, derived_key[:len(ciphertext)])
         return plaintext
+
 
     def _derive_shared_secret(self, shared_secret):
         kdf = HKDF(
@@ -417,6 +408,7 @@ class QuantumSecureDecryptor:
             backend=default_backend()
         )
         return kdf.derive(shared_secret)
+    
 class Dsls_OTP_FileEncryptor:
     def __init__(self, security_constants, receiver_public_key):
         self.security_constants = security_constants
@@ -426,6 +418,7 @@ class Dsls_OTP_FileEncryptor:
         self.bytes_encrypted = 0
         self.key_start_time = time.time()
         self.quantum_encryptor = QuantumSecureEncryptor(receiver_public_key, security_constants)
+        self.encrypted_session_key = None
 
     def encrypt_segment(self, segment):
         if len(segment) == 0:
@@ -433,7 +426,11 @@ class Dsls_OTP_FileEncryptor:
         
         try:
             encrypted_data = self.quantum_encryptor.encrypt_segment(segment)
+            self.encrypted_session_key = encrypted_data['encapsulated_key']
+            key_id_bytes = bytes.fromhex(encrypted_data['key_id'])
+            
             packet = struct.pack('>I', self.segment_counter)
+            packet += encrypted_data['key_id'].encode('utf-8')
             packet += encrypted_data['ciphertext']
             packet += encrypted_data['encapsulated_key']
             
@@ -444,6 +441,16 @@ class Dsls_OTP_FileEncryptor:
             raise e
         except Exception as e:
             raise SecurityError(f"数据段加密失败: {e}")
+
+    def encrypt_data(self, data):
+        segment_size = self.security_constants.max_segment_size
+        segments = [data[i:i+segment_size] for i in range(0, len(data), segment_size)]
+        encrypted_packets = []
+        for segment in segments:
+            packet = self.encrypt_segment(segment)
+            if packet:
+                encrypted_packets.append(packet)
+        return encrypted_packets
 
 class Dsls_OTP_FileDecryptor:
     def __init__(self, security_constants, private_key):
@@ -456,29 +463,33 @@ class Dsls_OTP_FileDecryptor:
     def decrypt_segment(self, packet):
         try:
             segment_id = struct.unpack('>I', packet[:4])[0]
+            key_id_bytes = packet[4:20]
+            key_id = key_id_bytes.hex()
+            remaining = packet[20:]
+            encapsulated_key_len = 128
+            encapsulated_key = remaining[-encapsulated_key_len:]
+            ciphertext = remaining[:-encapsulated_key_len]
+        
             encrypted_data = {
-                'ciphertext': packet[4:],
-                'encapsulated_key': packet[4:]  # 假设封装密钥在密文之后
+                'key_id': key_id,
+                'ciphertext': ciphertext,
+                'encapsulated_key': encapsulated_key
             }
-            
+        
             plaintext = self.quantum_decryptor.decrypt_segment(encrypted_data)
             return segment_id, plaintext, None
         except Exception as e:
             raise SecurityError(f"数据段解密失败: {e}")
 
+
     def decrypt_data(self, packets):
         try:
             decrypted_segments = []
-            current_session_key = self.session_key
             for i, packet in enumerate(packets):
                 try:
                     if len(packet) < 4:
                         raise SecurityError(f"数据包 {i} 长度不足，至少需要 4 字节，实际长度: {len(packet)}")
                     segment_id, plaintext, new_session_key = self.decrypt_segment(packet)
-                    
-                    if new_session_key:
-                        self._rotate_session_key(new_session_key)
-                        current_session_key = new_session_key
                     
                     decrypted_segments.append((segment_id, plaintext))
                     self.bytes_decrypted += len(plaintext)
@@ -1092,6 +1103,20 @@ def generate_key_pair(private_key_file, public_key_file, password=None):
         print("密钥生成完成!")
     except Exception as e:
         print(f"密钥生成失败: {e}")
+
+def obfuscate_public_key(public_key, seed):
+    pubkey_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    random.seed(seed)
+    mask = bytes([random.randint(0, 255) for _ in range(len(pubkey_bytes))])
+    obfuscated = bytes([b ^ m for b, m in zip(pubkey_bytes, mask)])
+    return obfuscated, mask
+
+def deobfuscate_public_key(obfuscated_pubkey, mask, seed):
+    pubkey_bytes = bytes([b ^ m for b, m in zip(obfuscated_pubkey, mask)])
+    return serialization.load_der_public_key(pubkey_bytes, backend=default_backend())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

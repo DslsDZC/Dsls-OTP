@@ -40,12 +40,12 @@ Dsls-OTP/
 
 ### 1. 加密文件
 ```bash
-python dsls-otp.py encrypt --input <输入文件路径> --output <输出文件路径> --receiver-key <接收方公钥文件路径> [--lightweight]
+python dsls-otp.py encrypt <输入文件路径> <输出文件路径> --receiver-key <接收方公钥文件路径> [--lightweight]
 ```
 
 ### 2. 解密文件
 ```bash
-python dsls-otp.py decrypt --input <输入文件路径> --output <输出文件路径> --private-key <私钥文件路径> [--password <私钥密码>]
+python dsls-otp.py decrypt <输入文件路径> <输出文件路径> --private-key <私钥文件路径> [--password <私钥密码>]
 ```
 
 ### 3. 生成密钥对
@@ -55,12 +55,12 @@ python dsls-otp.py keygen --private-key <私钥保存路径> --public-key <公�
 
 ### 4. 通过网络发送加密文件
 ```bash
-python dsls-otp.py send --input <输入文件路径> --receiver-key <接收方公钥文件路径> --target <目标IP:端口> [--lightweight]
+python dsls-otp.py send <输入文件路径> <接收方公钥文件路径> --target <目标IP:端口> [--lightweight]
 ```
 
 ### 5. 接收并解密网络文件
 ```bash
-python dsls-otp.py receive --output <输出文件路径> --private-key <私钥文件路径> [--listen <监听地址:端口>] [--password <私钥密码>]
+python dsls-otp.py receive <输出文件路径> <私钥文件路径> [--listen <监听地址:端口>] [--password <私钥密码>]
 ```
 
 ---

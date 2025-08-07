@@ -28,12 +28,12 @@ Whether for resource-constrained embedded devices or high-performance standard a
 
 ### 1. Encrypt a File
 ```bash
-python dsls-otp.py encrypt --input <input file path> --output <output file path> --receiver-key <receiver public key file path> [--lightweight]
+python dsls-otp.py encrypt <input file path> <output file path> --receiver-key <receiver public key file path> [--lightweight]
 ```
 
 ### 2. Decrypt a File
 ```bash
-python dsls-otp.py decrypt --input <input file path> --output <output file path> --private-key <private key file path> [--password <private key password>]
+python dsls-otp.py decrypt <input file path> <output file path> --private-key <private key file path> [--password <private key password>]
 ```
 
 ### 3. Generate Key Pair
@@ -43,12 +43,12 @@ python dsls-otp.py keygen --private-key <private key save path> --public-key <pu
 
 ### 4. Send Encrypted File Over Network
 ```bash
-python dsls-otp.py send --input <input file path> --receiver-key <receiver public key file path> --target <target IP:port> [--lightweight]
+python dsls-otp.py send <input file path> --receiver-key <receiver public key file path> --target <target IP:port> [--lightweight]
 ```
 
 ### 5. Receive and Decrypt Network File
 ```bash
-python dsls-otp.py receive --output <output file path> --private-key <private key file path> [--listen <listen address:port>] [--password <private key password>]
+python dsls-otp.py receive <output file path> --private-key <private key file path> [--listen <listen address:port>] [--password <private key password>]
 ```
 
 ---
