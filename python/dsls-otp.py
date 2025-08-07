@@ -348,17 +348,25 @@ class QuantumSecureEncryptor:
     
     def encrypt_segment(self, segment):
         true_random_key = QOTPGenerator.generate_key(len(segment))
-        key_id = secrets.token_hex(16)
-        
-        ciphertext = QOTPGenerator.encrypt(segment, true_random_key)
         
         encapsulated_key, shared_secret = self._encapsulate_key(true_random_key)
+        stream_key = self._derive_shared_secret(shared_secret)
+        nonce = b'\x00' * 16
         
+        cipher = Cipher(
+            algorithms.ChaCha20(stream_key, nonce),
+            mode=None,
+            backend=default_backend()
+        )
+        keystream = cipher.encryptor().update(b'\x00' * len(segment))
+
+        ciphertext = QOTPGenerator.encrypt(segment, true_random_key)
+        encrypted_key = QOTPGenerator.encrypt(true_random_key, keystream)
         
         return {
-            "key_id": key_id,
             "ciphertext": ciphertext,
-            "encapsulated_key": encapsulated_key
+            "encapsulated_key": encapsulated_key,
+            "encrypted_key": encrypted_key
         }
     
     def _encapsulate_key(self, key):
@@ -370,9 +378,9 @@ class QuantumSecureEncryptor:
     def _derive_shared_secret(self, shared_secret):
         kdf = HKDF(
             algorithm=hashes.SHA256(),
-            length=self.security_constants.session_key_length,
+            length=32,
             salt=self.security_constants.salt,
-            info=b'derived-key',
+            info=b'chacha20-key',
             backend=default_backend()
         )
         return kdf.derive(shared_secret)
@@ -385,26 +393,39 @@ class QuantumSecureDecryptor:
     
     def decrypt_segment(self, encrypted_data):
         shared_secret = DslsQuantumLib.kyber_decapsulate(
-        self.private_key,
-        encrypted_data["encapsulated_key"],
-        mode=self.security_constants.quantum_mode
+            self.private_key,
+            encrypted_data["encapsulated_key"],
+            mode=self.security_constants.quantum_mode
         )
         derived_key = self._derive_shared_secret(shared_secret)
+        nonce = b'\x00' * 16
     
-        ciphertext = encrypted_data["ciphertext"]
-        if len(derived_key) < len(ciphertext):
-            raise SecurityError("密钥长度不足，无法解密")
-    
-        plaintext = QOTPGenerator.decrypt(ciphertext, derived_key[:len(ciphertext)])
+        cipher = Cipher(
+            algorithms.ChaCha20(derived_key, nonce),
+            mode=None,
+            backend=default_backend()
+        )
+        
+        keystream = cipher.encryptor().update(b'\x00' * len(encrypted_data["encrypted_key"]))
+        
+        true_random_key = QOTPGenerator.decrypt(
+            encrypted_data["encrypted_key"],
+            keystream
+        )
+
+        plaintext = QOTPGenerator.decrypt(
+            encrypted_data["ciphertext"],
+            true_random_key
+        )
         return plaintext
 
 
     def _derive_shared_secret(self, shared_secret):
         kdf = HKDF(
             algorithm=hashes.SHA256(),
-            length=self.security_constants.session_key_length,
+            length=32,
             salt=self.security_constants.salt,
-            info=b'derived-key',
+            info=b'chacha20-key',
             backend=default_backend()
         )
         return kdf.derive(shared_secret)
@@ -427,12 +448,12 @@ class Dsls_OTP_FileEncryptor:
         try:
             encrypted_data = self.quantum_encryptor.encrypt_segment(segment)
             self.encrypted_session_key = encrypted_data['encapsulated_key']
-            key_id_bytes = bytes.fromhex(encrypted_data['key_id'])
             
             packet = struct.pack('>I', self.segment_counter)
-            packet += encrypted_data['key_id'].encode('utf-8')
-            packet += encrypted_data['ciphertext']
             packet += encrypted_data['encapsulated_key']
+            packet += struct.pack('>H', len(encrypted_data['encrypted_key']))
+            packet += encrypted_data['encrypted_key']
+            packet += encrypted_data['ciphertext']
             
             self.segment_counter += 1
             self.bytes_encrypted += len(segment)
@@ -462,18 +483,16 @@ class Dsls_OTP_FileDecryptor:
 
     def decrypt_segment(self, packet):
         try:
-            segment_id = struct.unpack('>I', packet[:4])[0]
-            key_id_bytes = packet[4:20]
-            key_id = key_id_bytes.hex()
-            remaining = packet[20:]
-            encapsulated_key_len = 128
-            encapsulated_key = remaining[-encapsulated_key_len:]
-            ciphertext = remaining[:-encapsulated_key_len]
+            segment_id = struct.unpack('>I', packet[0:4])[0]
+            encapsulated_key = packet[4:132]
+            key_len = struct.unpack('>H', packet[132:134])[0]
+            encrypted_key = packet[134:134+key_len]
+            ciphertext = packet[134+key_len:]
         
             encrypted_data = {
-                'key_id': key_id,
-                'ciphertext': ciphertext,
-                'encapsulated_key': encapsulated_key
+                'encapsulated_key': encapsulated_key,
+                'encrypted_key': encrypted_key,
+                'ciphertext': ciphertext
             }
         
             plaintext = self.quantum_decryptor.decrypt_segment(encrypted_data)
