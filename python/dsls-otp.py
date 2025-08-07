@@ -405,14 +405,13 @@ class QuantumSecureDecryptor:
             mode=None,
             backend=default_backend()
         )
-        
         keystream = cipher.encryptor().update(b'\x00' * len(encrypted_data["encrypted_key"]))
-        
+    
         true_random_key = QOTPGenerator.decrypt(
             encrypted_data["encrypted_key"],
             keystream
         )
-
+    
         plaintext = QOTPGenerator.decrypt(
             encrypted_data["ciphertext"],
             true_random_key
@@ -531,7 +530,7 @@ class Dsls_OTP_FileDecryptor:
             
             return file_data
         except Exception as e:
-            raise SecurityError(f"数据重组失败: {e}")
+            raise SecurityError(f"数据重组失败; \n{e}")
         
 class ProtocolMonitor:
     def __init__(self):
@@ -818,7 +817,7 @@ class NetworkDecryptor:
             public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
             print(f"公钥反混淆成功: {public_key.curve.name}")
             
-            decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+            decryptor = Dsls_OTP_FileDecryptor(security_constants, private_key)
             
             packets = []
             print("接收加密数据...")
@@ -1033,7 +1032,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         print(f"公钥反混淆失败: {e}")
         return
     
-    decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+    decryptor = Dsls_OTP_FileDecryptor(security_constants, private_key)
     
     packets = []
     while offset < len(file_data):
@@ -1060,7 +1059,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         print(f"解密数据大小: {len(decrypted_data)} 字节")
         monitor.update(len(decrypted_data))
     except SecurityError as e:
-        print(f"安全错误: {e}")
+        print(f"安全错误: \n{e}")
         return
     
     try:

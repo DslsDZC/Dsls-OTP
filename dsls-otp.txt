@@ -515,7 +515,7 @@ class Dsls_OTP_FileDecryptor:
             
             return file_data
         except Exception as e:
-            raise SecurityError(f"数据重组失败: {e}")
+            raise SecurityError(f"数据重组失败: \n{e}")
         
 class ProtocolMonitor:
     def __init__(self):
@@ -802,7 +802,7 @@ class NetworkDecryptor:
             public_key = deobfuscate_public_key(obfuscated_pubkey, mask, security_constants.obfuscation_seed)
             print(f"公钥反混淆成功: {public_key.curve.name}")
             
-            decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+            decryptor = Dsls_OTP_FileDecryptor(security_constants, private_key)
             
             packets = []
             print("接收加密数据...")
@@ -1017,7 +1017,7 @@ def server_decrypt(input_file, output_file, private_key_file, password=None):
         print(f"公钥反混淆失败: {e}")
         return
     
-    decryptor = Dsls_OTP_FileDecryptor(security_constants, shared_secret)
+    decryptor = Dsls_OTP_FileDecryptor(security_constants, private_key)
     
     packets = []
     while offset < len(file_data):
