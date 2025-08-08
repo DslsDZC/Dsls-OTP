@@ -14,6 +14,7 @@ import threading
 import select
 import ctypes
 import platform
+import oqs
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -113,55 +114,60 @@ class KeyVault:
 class DslsQuantumLib:
     @staticmethod
     def generate_kyber_keypair(mode="dsls-kyber768"):
-        key_size = {
-            "dsls-kyber512": (800, 768),
-            "dsls-kyber768": (1184, 1088),
-            "dsls-kyber1024": (1568, 1440)
-        }.get(mode, (1184, 1088))
+        algorithm_map = {
+            "dsls-kyber512": "Kyber512",
+            "dsls-kyber768": "Kyber768",
+            "dsls-kyber1024": "Kyber1024"
+        }
         
-        public_key = secrets.token_bytes(key_size[0])
-        private_key = secrets.token_bytes(key_size[1])
-        return public_key, private_key
+        algo = algorithm_map.get(mode, "Kyber768")
+        
+        try:
+            with oqs.KeyEncapsulation(algo) as kem:
+                public_key = kem.generate_keypair()
+                private_key = kem.export_secret_key()
+                return public_key, private_key
+        except Exception as e:
+            raise SecurityError(f"生成量子密钥对失败: {str(e)}")
 
     @staticmethod
     def kyber_encapsulate(public_key, mode="dsls-kyber768"):
-        key_size = {
-            "dsls-kyber512": 32,
-            "dsls-kyber768": 32,
-            "dsls-kyber1024": 32
-        }.get(mode, 32)
+        algorithm_map = {
+            "dsls-kyber512": "Kyber512",
+            "dsls-kyber768": "Kyber768",
+            "dsls-kyber1024": "Kyber1024"
+        }
         
-        shared_secret = secrets.token_bytes(key_size)
-        ciphertext = secrets.token_bytes(128)  # 模拟封装后的密钥
-        return ciphertext, shared_secret
+        algo = algorithm_map.get(mode, "Kyber768")
+        
+        try:
+            with oqs.KeyEncapsulation(algo) as kem:
+                ciphertext, shared_secret = kem.encap_secret(public_key)
+                return ciphertext, shared_secret
+        except Exception as e:
+            raise SecurityError(f"量子密钥封装失败: {str(e)}")
 
     @staticmethod
     def kyber_decapsulate(private_key, ciphertext, mode="dsls-kyber768"):
-        key_size = {
-            "dsls-kyber512": 32,
-            "dsls-kyber768": 32,
-            "dsls-kyber1024": 32
-        }.get(mode, 32)
+        algorithm_map = {
+            "dsls-kyber512": "Kyber512",
+            "dsls-kyber768": "Kyber768",
+            "dsls-kyber1024": "Kyber1024"
+        }
         
-        shared_secret = secrets.token_bytes(key_size)  # 模拟解封装后的密钥
-        return shared_secret
-
-    @staticmethod
-    def dilithium_sign(private_key, data, mode="dsls-dilithium3"):
-        sig_size = {
-            "dsls-dilithium2": 2420,
-            "dsls-dilithium3": 3309,
-            "dsls-dilithium5": 4627
-        }.get(mode, 3309)
+        algo = algorithm_map.get(mode, "Kyber768")
         
-        return secrets.token_bytes(sig_size)
-
-    @staticmethod
-    def dilithium_verify(public_key, data, signature, mode="dsls-dilithium3"):
-        return True  # 模拟实现
+        try:
+            with oqs.KeyEncapsulation(algo) as kem:
+                kem.import_secret_key(private_key)
+                shared_secret = kem.decap_secret(ciphertext)
+                return shared_secret
+        except Exception as e:
+            raise SecurityError(f"量子密钥解封装失败: {str(e)}")
 
 class SecurityConstants:
     def __init__(self, lightweight=False):
+        self.use_quantum_crypto = True
         self.session_key_length = 16 if lightweight else 32
         self.nonce_length = 8 if lightweight else 12
         self.tag_length = 8 if lightweight else 16
@@ -449,6 +455,7 @@ class Dsls_OTP_FileEncryptor:
             self.encrypted_session_key = encrypted_data['encapsulated_key']
             
             packet = struct.pack('>I', self.segment_counter)
+            packet += struct.pack('>H', len(encrypted_data['encapsulated_key']))
             packet += encrypted_data['encapsulated_key']
             packet += struct.pack('>H', len(encrypted_data['encrypted_key']))
             packet += encrypted_data['encrypted_key']
@@ -483,10 +490,18 @@ class Dsls_OTP_FileDecryptor:
     def decrypt_segment(self, packet):
         try:
             segment_id = struct.unpack('>I', packet[0:4])[0]
-            encapsulated_key = packet[4:132]
-            key_len = struct.unpack('>H', packet[132:134])[0]
-            encrypted_key = packet[134:134+key_len]
-            ciphertext = packet[134+key_len:]
+            offset = 4
+            
+            encapsulated_key_len = struct.unpack('>H', packet[offset:offset+2])[0]
+            offset += 2
+            encapsulated_key = packet[offset:offset+encapsulated_key_len]
+            offset += encapsulated_key_len
+            key_len = struct.unpack('>H', packet[offset:offset+2])[0]
+            offset += 2
+            encrypted_key = packet[offset:offset+key_len]
+            offset += key_len
+            
+            ciphertext = packet[offset:]
         
             encrypted_data = {
                 'encapsulated_key': encapsulated_key,
@@ -497,7 +512,7 @@ class Dsls_OTP_FileDecryptor:
             plaintext = self.quantum_decryptor.decrypt_segment(encrypted_data)
             return segment_id, plaintext, None
         except Exception as e:
-            raise SecurityError(f"数据段解密失败; \n{e}")
+            raise SecurityError(f"数据段解密失败: {e}")
 
 
     def decrypt_data(self, packets):
@@ -524,7 +539,7 @@ class Dsls_OTP_FileDecryptor:
             file_hash = full_data[:32]
             file_data = full_data[32:]
             
-            calculated_hash = hashlib.sha256(file_data).digest()
+            calculated_hash = hashlib.shlsa256(file_data).digest()
             if not constant_time.bytes_eq(file_hash, calculated_hash):
                 raise SecurityError("文件完整性校验失败: 文件可能已被篡改")
             
@@ -1084,6 +1099,25 @@ def generate_key_pair(private_key_file, public_key_file, password=None):
         print("错误: 密钥文件已存在")
         return
     
+    if input("生成量子安全密钥 (Kyber768)? (y/n): ").lower() == 'y':
+        print("生成量子安全密钥对...")
+        try:
+            public_key, private_key = DslsQuantumLib.generate_kyber_keypair()
+            
+            # 保存量子安全密钥
+            with open(private_key_file, 'wb') as f:
+                f.write(private_key)
+                
+            with open(public_key_file, 'wb') as f:
+                f.write(public_key)
+                
+            print(f"量子安全私钥已保存到: {private_key_file}")
+            print(f"量子安全公钥已保存到: {public_key_file}")
+            print("注意: 量子安全密钥使用原始二进制格式，不是PEM")
+            return
+        except Exception as e:
+            print(f"量子密钥生成失败: {e}")
+
     password_protected = False
     if password is None:
         if input("是否使用密码保护私钥? (y/n): ").lower() == 'y':
