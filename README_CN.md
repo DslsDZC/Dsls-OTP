@@ -72,6 +72,10 @@ python dsls-otp.py receive <输出文件路径> <私钥文件路径> [--listen <
   ```bash
   pip install -r requirements.txt
   ```
+  **PQC库集成**：
+  当前实现使用secrets.token_bytes模拟Kyber操作，实际部署需集成：
+    -liboqs-python
+    -OpenQuantumSafe
 
 ---
 

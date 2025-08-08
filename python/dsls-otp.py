@@ -497,7 +497,7 @@ class Dsls_OTP_FileDecryptor:
             plaintext = self.quantum_decryptor.decrypt_segment(encrypted_data)
             return segment_id, plaintext, None
         except Exception as e:
-            raise SecurityError(f"数据段解密失败: {e}")
+            raise SecurityError(f"数据段解密失败; \n{e}")
 
 
     def decrypt_data(self, packets):
