@@ -353,7 +353,18 @@ class QuantumSecureEncryptor:
     def encrypt_segment(self, segment):
         try:
             if not isinstance(segment, bytes):
-                segment = segment.encode('utf-8') if isinstance(segment, str) else bytes(segment)
+                try:
+                    segment = bytes(segment)
+                except TypeError as e:
+                    raise SecurityError(f"无法转换段数据类型: {type(segment)} -> {str(e)}")
+            
+            if isinstance(segment, str):
+                segment = segment.encode('utf-8')
+            elif not isinstance(segment, bytes):
+                try:
+                    segment = bytes(segment)
+                except TypeError:
+                    raise SecurityError(f"不支持的段数据类型: {type(segment)}")
 
             true_random_key = QOTPGenerator.generate_key(len(segment))
 
@@ -492,7 +503,12 @@ class Dsls_OTP_FileEncryptor:
 
     def encrypt_data(self, data):
         segment_size = self.security_constants.max_segment_size
-        segments = [data[i:i+segment_size] for i in range(0, len(data), segment_size)]
+        segments = []
+        for i in range(0, len(data), segment_size):
+            chunk = data[i:i+segment_size]
+            if not isinstance(chunk, bytes):
+                chunk = bytes(chunk)
+            segments.append(chunk)
         encrypted_packets = []
         for segment in segments:
             packet = self.encrypt_segment(segment)
@@ -1131,25 +1147,6 @@ def generate_key_pair(private_key_file, public_key_file, password=None):
     if os.path.exists(private_key_file) or os.path.exists(public_key_file):
         print("错误: 密钥文件已存在")
         return
-    
-    if input("生成量子安全密钥 (Kyber768)? (y/n): ").lower() == 'y':
-        print("生成量子安全密钥对...")
-        try:
-            public_key, private_key = DslsQuantumLib.generate_kyber_keypair()
-            
-            # 保存量子安全密钥
-            with open(private_key_file, 'wb') as f:
-                f.write(private_key)
-                
-            with open(public_key_file, 'wb') as f:
-                f.write(public_key)
-                
-            print(f"量子安全私钥已保存到: {private_key_file}")
-            print(f"量子安全公钥已保存到: {public_key_file}")
-            print("注意: 量子安全密钥使用原始二进制格式，不是PEM")
-            return
-        except Exception as e:
-            print(f"量子密钥生成失败: {e}")
 
     password_protected = False
     if password is None:
