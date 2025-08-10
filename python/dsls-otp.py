@@ -353,33 +353,34 @@ class QuantumSecureEncryptor:
     def encrypt_segment(self, segment):
         try:
             if not isinstance(segment, bytes):
-                try:
+                if isinstance(segment, (bytearray, memoryview)):
                     segment = bytes(segment)
-                except TypeError as e:
-                    raise SecurityError(f"无法转换段数据类型: {type(segment)} -> {str(e)}")
-            
-            if isinstance(segment, str):
-                segment = segment.encode('utf-8')
-            elif not isinstance(segment, bytes):
-                try:
-                    segment = bytes(segment)
-                except TypeError:
-                    raise SecurityError(f"不支持的段数据类型: {type(segment)}")
-
+                elif isinstance(segment, str):
+                    segment = segment.encode('utf-8')
+                else:
+                    try:
+                        segment = bytes(segment)
+                    except TypeError:
+                        raise SecurityError(f"不支持的段数据类型: {type(segment)}")
+        
+            if not segment:
+                return {
+                    "ciphertext": b'',
+                    "encapsulated_key": b'',
+                    "encrypted_key": b'',
+                    "nonce": b'',
+                    "session_pub_key": b''
+                }
+        
             true_random_key = QOTPGenerator.generate_key(len(segment))
-
-            if not isinstance(true_random_key, bytes):
-                true_random_key = bytes(true_random_key)
-
             encapsulated_key, shared_secret = self._encapsulate_key()
-
+        
             if not isinstance(shared_secret, bytes):
                 shared_secret = bytes(shared_secret)
-
+        
             stream_key = self._derive_shared_secret(shared_secret)
-
             nonce = secrets.token_bytes(16)
-
+        
             cipher = Cipher(
                 algorithms.ChaCha20(stream_key, nonce),
                 mode=None,
@@ -388,6 +389,7 @@ class QuantumSecureEncryptor:
             keystream = cipher.encryptor().update(b'\x00' * len(true_random_key))
             ciphertext = QOTPGenerator.encrypt(segment, true_random_key)
             encrypted_key = QOTPGenerator.encrypt(true_random_key, keystream)
+        
             SecureMemory.secure_erase(true_random_key)
             SecureMemory.secure_erase(stream_key)
             
@@ -397,12 +399,11 @@ class QuantumSecureEncryptor:
                 "encrypted_key": encrypted_key,
                 "nonce": nonce,
                 "session_pub_key": self.session_keypair[0]
-            }
+           }
         except Exception as e:
             raise SecurityError(f"加密段时发生错误: {str(e)}")
     
     def _encapsulate_key(self):
-        """封装共享密钥（不传入OTP密钥）"""
         return DslsQuantumLib.kyber_encapsulate(
             self.session_keypair[0],
             self.security_constants.quantum_mode
